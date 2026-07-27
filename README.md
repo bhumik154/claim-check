@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 102 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 103 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -41,6 +41,7 @@ Other things worth knowing about, by module:
 | A hanging test run | Killed at the configured `--timeout`, fails open with a clear reason instead of blocking a commit (or an interactive rebase) forever |
 | A bare `"22 passed"` claim against a real run that also reported a collection or fixture-setup error | Flagged as a mismatch, not silently matched: an error means some test never got a chance to pass or fail, so the true denominator is unknown even though the passed count is technically accurate |
 | `claim-check verify-tests MSG --cwd X --command Y` (claim-check's own flags placed *after* the positional message) | Confirmed correctly parsed regardless of position; a prior version of this parser using `argparse.REMAINDER` silently swallowed everything after the message into pytest passthrough args instead |
+| A test suite output containing a byte invalid in the platform's default text encoding (confirmed on Windows with `pytest -s`, where the locale default is often `cp1252`, not UTF-8) | Decoded as UTF-8 with invalid bytes replaced, not left to crash the whole process; the default (non-`-s`) case is already safe, since pytest's own capture machinery re-encodes captured output before ever printing it |
 
 ## Usage
 

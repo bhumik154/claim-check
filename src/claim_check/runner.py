@@ -48,6 +48,8 @@ def run_pytest(
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_s,
         )
     except subprocess.TimeoutExpired as exc:
