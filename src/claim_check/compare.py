@@ -49,6 +49,19 @@ def compare_claims(claims: list[Claim], counts: Optional[PytestCounts]) -> Verdi
 def _mismatch_reason(claim: Claim, counts: PytestCounts) -> Optional[str]:
     """Returns None if the claim matches, otherwise a human-readable reason
     it doesn't."""
+    if counts.errors > 0:
+        # A collection failure (a broken import) or a fixture setup/teardown
+        # error doesn't stop the rest of the suite from running - confirmed
+        # directly, a single broken fixture on one test still lets 22 other
+        # tests run and pass normally, producing a completely ordinary-
+        # looking "22 passed, 1 error" summary. "22 passed" is literally
+        # true, but the true denominator is unknown: an error means some
+        # test never got a chance to pass or fail, so no count-based claim
+        # can be verified as complete. Checked before any claim-specific
+        # comparison, so it applies uniformly to every claim kind.
+        plural = "" if counts.errors == 1 else "s"
+        return f'claimed "{claim.raw_text}" but the run reported {counts.errors} error{plural}; the total is unverified'
+
     if claim.kind == "n_passed":
         if claim.claimed_passed != counts.passed:
             return f'claimed "{claim.raw_text}" but {counts.passed} actually passed'
