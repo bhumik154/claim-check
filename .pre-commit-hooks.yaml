@@ -2,7 +2,15 @@
   name: claim-check
   description: Verify test-count claims in the commit message against real pytest output.
   entry: claim-check-precommit
-  language: python
+  # system, not python: a "python" hook runs inside pre-commit's own isolated,
+  # hermetic virtualenv, which has none of the calling project's actual test
+  # dependencies (or even pytest itself, unless separately declared) - every
+  # verification would silently fail open with "could not verify" instead of
+  # actually checking anything. Confirmed directly: reproduced
+  # ModuleNotFoundError: No module named 'pytest' inside that isolated venv
+  # before fixing this. "system" runs in the environment the user actually
+  # invoked git from, where their real dependencies live.
+  language: system
   stages: [commit-msg]
   always_run: true
   pass_filenames: true

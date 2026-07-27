@@ -1,0 +1,29 @@
+rootdir: /tmp/xdist-check
+plugins: xdist-3.8.0
+created: 2/2 workers
+2 workers [5 items]
+
+scheduling tests via LoadScheduling
+
+test_a.py::test_3
+test_a.py::test_1
+[gw0] [ 20%] PASSED test_a.py::test_1
+test_a.py::test_2
+[gw0] [ 40%] PASSED test_a.py::test_2
+test_b.py::test_5
+[gw0] [ 60%] PASSED test_b.py::test_5
+[gw1] [ 80%] FAILED test_a.py::test_3
+test_b.py::test_4
+[gw1] [100%] PASSED test_b.py::test_4
+
+================================== FAILURES ===================================
+___________________________________ test_3 ____________________________________
+[gw1] win32 -- Python 3.12.10
+
+>   def test_3(): assert False
+E   assert False
+
+test_a.py:3: AssertionError
+=========================== short test summary info ===========================
+FAILED test_a.py::test_3 - assert False
+========================= 1 failed, 4 passed in 0.59s =========================

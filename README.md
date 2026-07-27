@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 79 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 81 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, and all three entry points. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -29,7 +29,10 @@ Other things worth knowing about, by module:
 | A decimal number (`"0.22"`) or an issue reference (`"#22"`) next to the word "passed" | Guarded explicitly so they're never misread as a count |
 | `"not all tests pass yet"` | Negation guard: never registers as a claim |
 | The same kind of claim repeated with conflicting numbers | The last occurrence in the text wins, the exact "stale count restated later" scenario this project exists for |
-| pytest's real summary line, in every shape it takes (plain, with a failure, with a warning, with skips/xfails/xpasses, `no tests ran`, ANSI-colored, multiple partial lines from a plugin) | Parsed from pytest's own authoritative tally, never re-derived by counting individual result lines |
+| pytest's real summary line, in every shape it takes (plain, with a failure, with a warning, with skips/xfails/xpasses, `no tests ran`, ANSI-colored) | Parsed from pytest's own authoritative tally, never re-derived by counting individual result lines |
+| Real captured pytest-xdist output | Confirmed against an actual `pytest -n 2` run, not a guess: xdist prints exactly one final aggregate summary line, never per-worker partials |
+| Multiple summary lines from separate invocations piped together (`pytest tests/unit && pytest tests/integration`) | Aggregated into a combined total, not "last one wins" - a claim like "all 100 tests pass" refers to the sum, not whichever suite happened to run last |
+| A `no tests ran` line, which the generic summary regex also matches at the same position | De-duplicated explicitly; without it, aggregation counted that one line twice |
 | An `INTERNALERROR>` crash with no summary line at all | Structurally distinct from "0 tests ran"; fails open, does not block the commit |
 | The exact `git commit -m "$(cat <<'EOF' ... EOF)"` heredoc pattern this project's own commits use | Verified end to end: extracted correctly, and a wrong claim inside it is caught |
 | Unbalanced quotes, an unresolved `$VAR` inside an unquoted heredoc, `git commit` as a substring inside an unrelated `echo` | All fail open (or are correctly ignored), a parse failure is not evidence a claim is wrong |
@@ -67,6 +70,8 @@ repos:
 
 The `commit-msg` stage isn't enabled by pre-commit's default install. Run `pre-commit install --hook-type commit-msg`, or add `default_install_hook_types: [pre-commit, commit-msg]` to your own config, or this hook installs but silently never fires.
 
+This hook runs as `language: system`, deliberately, not `language: python`: a `python`-language hook runs inside pre-commit's own isolated virtualenv, which has none of your project's actual test dependencies (or even pytest itself). Confirmed directly: that misconfiguration doesn't error, it silently prints "could not verify... allowing commit" on every commit, since the runner crash fails open by design. Because it's `system`, **`claim-check` (and your project's own test dependencies) need to be installed in the same environment you actually run `git commit` from**, not a separate one, or the hook has nothing to run against.
+
 **Claude Code hook** (see [`examples/claude-code-settings-snippet.json`](examples/claude-code-settings-snippet.json)), in `.claude/settings.json`:
 
 ```json
@@ -89,6 +94,7 @@ Zero runtime dependencies.
 
 ## What this is not
 
+- **This tool verifies truthfulness, not test success.** It checks whether a claim matches the actual result, not whether the actual result is good. If you write "14/15 passing" and the suite genuinely has 14 passed and 1 failed, that claim is accurate, so this exits 0 and the commit proceeds, even though a test is failing. Most people reasonably assume a hook running pytest blocks a commit on any failure; this one only blocks on a claim that doesn't match reality. Confirmed directly: `verify_tests("WIP: 14/15 passing, one test is currently broken", ...)` against a real 14-passed-1-failed result returns a match, not a mismatch. If you want commits blocked on red builds specifically, use a standard pre-push hook (or CI) for that; pair it with this one rather than expecting this one to cover it.
 - Not aware of what "the full suite" means to you, only what pytest actually collects for its own invocation. A scoped run (changed-files-only, `testpaths` restrictions, sharded CI) compared against a full-suite claim produces a false mismatch; see the warning at the top of Usage before you install this.
 - Not NLP. It can't fully resolve tense or discourse ("was at 15 passed, now 22/22" is genuinely ambiguous to a regex); the last matching occurrence of a given claim kind wins, which handles the common case but not every one.
 - pytest only in v0.1. Other runners (vitest, jest, cargo test) are a real, documented gap, not a silently unsupported one.
