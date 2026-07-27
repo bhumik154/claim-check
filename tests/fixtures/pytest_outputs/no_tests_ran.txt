@@ -1,0 +1,5 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+collected 0 items
+
+============================ no tests ran in 0.01s ==============================

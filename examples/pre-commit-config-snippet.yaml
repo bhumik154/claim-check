@@ -1,0 +1,12 @@
+# Add to your .pre-commit-config.yaml. The commit-msg stage is not enabled
+# by pre-commit's default install, so this repo also needs either:
+#   pre-commit install --hook-type commit-msg
+# or, in your own .pre-commit-config.yaml:
+#   default_install_hook_types: [pre-commit, commit-msg]
+# Without one of those, this hook is installed but silently never runs.
+
+repos:
+  - repo: https://github.com/bhumik154/claim-check
+    rev: v0.1.0
+    hooks:
+      - id: claim-check

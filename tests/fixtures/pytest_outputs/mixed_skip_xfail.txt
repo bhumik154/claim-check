@@ -1,0 +1,12 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+collected 12 items
+
+test_edge_cases.py ...F.sxX...                                          [100%]
+
+=================================== FAILURES ====================================
+______________________ test_something_that_broke _______________________________
+AssertionError: nope
+=========================== short test summary info =============================
+FAILED test_edge_cases.py::test_something_that_broke
+==================== 3 failed, 5 passed, 2 skipped, 1 xfailed, 1 xpassed in 1.23s ====================

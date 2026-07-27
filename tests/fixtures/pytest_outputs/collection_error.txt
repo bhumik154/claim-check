@@ -1,0 +1,10 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+collected 0 items / 1 error
+
+=================================== ERRORS ======================================
+______________________ ERROR collecting test_broken_import.py __________________
+ImportError: cannot import name 'thing_that_does_not_exist' from 'mymodule'
+=========================== short test summary info =============================
+ERROR test_broken_import.py
+================================ 1 error in 0.02s ================================

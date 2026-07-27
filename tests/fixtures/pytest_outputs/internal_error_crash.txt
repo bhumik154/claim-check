@@ -1,0 +1,6 @@
+INTERNALERROR> Traceback (most recent call last):
+INTERNALERROR>   File "site-packages/_pytest/main.py", line 269, in wrap_session
+INTERNALERROR>     session.exitstatus = doit(config, session) or 0
+INTERNALERROR>   File "site-packages/_pytest/main.py", line 322, in _main
+INTERNALERROR>     config.hook.pytest_collection(session=session)
+INTERNALERROR> RuntimeError: something went badly wrong inside a plugin

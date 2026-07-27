@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claim-check"
+version = "0.1.0"
+description = "Verify test-count claims in commit messages against real pytest output, as a pre-commit hook, a Claude Code hook, or a standalone CLI."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Bhumik Khatwani" }]
+dependencies = []
+keywords = [
+  "commit-message",
+  "pre-commit",
+  "claude-code",
+  "testing",
+  "verification",
+  "ci",
+  "hooks",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
+]
+
+[project.scripts]
+claim-check = "claim_check.cli:main"
+claim-check-precommit = "claim_check.entrypoints.precommit:main"
+claim-check-claude-hook = "claim_check.entrypoints.claude_hook:main"
+
+[project.urls]
+Homepage = "https://github.com/bhumik154/claim-check"
+Repository = "https://github.com/bhumik154/claim-check"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claim_check"]
+
+[dependency-groups]
+dev = ["pytest>=7.0"]
