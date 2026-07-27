@@ -49,3 +49,29 @@ def test_pytest_args_are_appended_after_the_command(tmp_path):
     result = run_pytest(tmp_path, pytest_args=["test_a.py"])
     assert result.counts is not None
     assert result.counts.passed == 1
+
+
+def test_a_byte_invalid_in_the_locale_encoding_does_not_crash_the_whole_process(tmp_path):
+    # On Windows, subprocess.run's text-mode decoding defaults to the
+    # locale's preferred encoding (often cp1252), not UTF-8. Confirmed
+    # directly: capture_output's reader thread (subprocess.py's Windows-
+    # only _readerthread, run in a daemon thread) calls fh.read(), and if
+    # that raises UnicodeDecodeError, the exception is swallowed inside the
+    # thread (only printed, never propagated), leaving proc.stdout as None
+    # - which then crashes run_pytest with an unrelated TypeError once None
+    # reaches parse_summary_line. 0x81 is a real trigger: it's one of the
+    # handful of byte values cp1252 leaves undefined, and it's also
+    # invalid on its own as UTF-8 (0x80-0xBF are continuation-only bytes),
+    # so this reproduces the crash regardless of platform/locale. Requires
+    # -s (or an equivalent capture-disabling pytest config) to reach the
+    # subprocess pipe at all: pytest's own default capture-and-report
+    # machinery already re-encodes captured output safely before ever
+    # printing it, masking this for the common case.
+    (tmp_path / "test_raw_byte.py").write_text(
+        "import os\n\ndef test_raw_bytes():\n    os.write(1, bytes([0x81]))\n    assert True\n",
+        encoding="utf-8",
+    )
+    result = run_pytest(tmp_path, pytest_args=["-s"])
+    assert result.returncode == 0
+    assert result.counts is not None
+    assert result.counts.passed == 1
