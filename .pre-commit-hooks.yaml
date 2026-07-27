@@ -1,0 +1,8 @@
+- id: claim-check
+  name: claim-check
+  description: Verify test-count claims in the commit message against real pytest output.
+  entry: claim-check-precommit
+  language: python
+  stages: [commit-msg]
+  always_run: true
+  pass_filenames: true

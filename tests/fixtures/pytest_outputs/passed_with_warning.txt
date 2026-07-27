@@ -1,0 +1,12 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+collected 36 items
+
+test_galaxy_builder_preset.py ......................................    [100%]
+
+============================== warnings summary ==============================
+..\..\..\..\Users\Bhumik Khatwani\AppData\Local\Programs\Python\Python312\Lib\site-packages\taichi\_lib\utils.py:70
+  DeprecationWarning: 'locale.getdefaultlocale' is deprecated
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= 36 passed, 1 warning in 43.25s ==========================

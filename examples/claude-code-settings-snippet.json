@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claim-check-claude-hook",
+            "if": "Bash(git commit *)"
+          }
+        ]
+      }
+    ]
+  }
+}

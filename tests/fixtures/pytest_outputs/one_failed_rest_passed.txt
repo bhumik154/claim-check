@@ -1,0 +1,12 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+collected 22 items
+
+test_spiral_galaxy_ic.py .....F................                          [100%]
+
+=================================== FAILURES ====================================
+______________________ test_exact_output_for_a_fixed_seed _______________________
+AssertionError: values did not match
+=========================== short test summary info =============================
+FAILED test_spiral_galaxy_ic.py::test_exact_output_for_a_fixed_seed
+=========================== 1 failed, 21 passed in 0.20s ==========================
