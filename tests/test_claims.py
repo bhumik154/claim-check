@@ -66,10 +66,15 @@ def test_decimal_number_not_split_into_a_false_claim():
     assert claims == []
 
 
-def test_multiple_claims_of_different_kinds_in_one_message_all_extracted():
+def test_multiple_claims_of_different_kinds_only_the_last_in_text_is_kept():
+    # Confirmed real: compare.py checks every returned claim against one
+    # pytest run, so two different-kind claims in the same message can't
+    # both be independently true. Only keeping the last one in the text
+    # (not one-per-kind) is what makes "14 passed. ... now 15/15 tests
+    # pass!" register as a correction instead of a contradiction.
     claims = extract_claims("17 passed. All tests pass.")
-    kinds = {c.kind for c in claims}
-    assert kinds == {"n_passed", "all_pass"}
+    assert len(claims) == 1
+    assert claims[0].kind == "all_pass"
 
 
 def test_case_insensitivity_of_all_tests_pass_phrase():
@@ -80,6 +85,31 @@ def test_case_insensitivity_of_all_tests_pass_phrase():
 
 def test_negated_all_tests_pass_phrase_is_not_treated_as_a_claim():
     assert extract_claims("not all tests pass yet, still debugging") == []
+
+
+def test_negated_n_passed_phrase_is_not_treated_as_a_claim():
+    # The negation guard was only wired up for all_pass, not n_passed or
+    # n_of_m, confirmed directly: "but not 22 passed yet" registered "22
+    # passed" as a real claim, which compare.py would then check against
+    # the actual run and block an honest, explicitly-negated commit.
+    assert extract_claims("Refactored the parser, but not 22 passed yet") == []
+
+
+def test_negated_n_of_m_phrase_is_not_treated_as_a_claim():
+    assert extract_claims("Still not 15/15 tests passing") == []
+
+
+def test_stale_count_corrected_with_a_different_claim_kind_is_not_a_contradiction():
+    # Confirmed real: grouping by kind let an n_passed claim and an n_of_m
+    # claim coexist, so a developer restating their own stale count using
+    # different phrasing ("14 passed" -> later "15/15 tests pass") was
+    # flagged as a mismatch on the stale claim, even though the later
+    # statement in the same message is the honest, current one.
+    claims = extract_claims("Initial run had 14 passed. Fixed the bug, now 15/15 tests pass!")
+    assert len(claims) == 1
+    assert claims[0].kind == "n_of_m"
+    assert claims[0].claimed_passed == 15
+    assert claims[0].claimed_total == 15
 
 
 def test_partial_ratio_claim_with_unequal_numerator_and_denominator_is_still_extracted():

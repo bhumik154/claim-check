@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 107 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 110 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -28,7 +28,8 @@ Other things worth knowing about, by module:
 | `"N passed"`, `"N/M tests"`/`"N/M passing"` (equal or unequal), `"all tests pass"`, `"all N tests pass"` | The full set of claim shapes detected, by regex, not NLP |
 | A decimal number (`"0.22"`) or an issue reference (`"#22"`) next to the word "passed" | Guarded explicitly so they're never misread as a count |
 | `"not all tests pass yet"` | Negation guard: never registers as a claim |
-| The same kind of claim repeated with conflicting numbers | The last occurrence in the text wins, the exact "stale count restated later" scenario this project exists for |
+| A claim repeated with conflicting numbers, whether restated in the same phrasing or a different one (`"14 passed"` later corrected to `"15/15 tests pass"`) | Only the last claim in the entire message is checked, regardless of kind, the exact "stale count restated later" scenario this project exists for; checking both would flag an honest correction as a contradiction, since one pytest run can't make two different counts both true |
+| `"not 22 passed"`, `"not 15/15 tests passing"` (negation directly adjacent to a bare-count or ratio claim, not just `"all tests pass"`) | Never registers as a claim, same guard as the `all_pass` negation case, applied to every claim kind |
 | pytest's real summary line, in every shape it takes (plain, with a failure, with a warning, with skips/xfails/xpasses, `no tests ran`, ANSI-colored) | Parsed from pytest's own authoritative tally, never re-derived by counting individual result lines |
 | Real captured pytest-xdist output | Confirmed against an actual `pytest -n 2` run, not a guess: xdist prints exactly one final aggregate summary line, never per-worker partials |
 | Multiple summary lines from separate invocations piped together (`pytest tests/unit && pytest tests/integration`) | Aggregated into a combined total, not "last one wins" - a claim like "all 100 tests pass" refers to the sum, not whichever suite happened to run last |
@@ -132,7 +133,7 @@ Zero runtime dependencies.
 
 - **This tool verifies truthfulness, not test success.** It checks whether a claim matches the actual result, not whether the actual result is good. If you write "14/15 passing" and the suite genuinely has 14 passed and 1 failed, that claim is accurate, so this exits 0 and the commit proceeds, even though a test is failing. Most people reasonably assume a hook running pytest blocks a commit on any failure; this one only blocks on a claim that doesn't match reality. Confirmed directly: `verify_tests("WIP: 14/15 passing, one test is currently broken", ...)` against a real 14-passed-1-failed result returns a match, not a mismatch. If you want commits blocked on red builds specifically, use a standard pre-push hook (or CI) for that; pair it with this one rather than expecting this one to cover it.
 - Not aware of what "the full suite" means to you, only what pytest actually collects for its own invocation. A scoped run (changed-files-only, `testpaths` restrictions, sharded CI) compared against a full-suite claim produces a false mismatch; see the warning at the top of Usage before you install this.
-- Not NLP. It can't fully resolve tense or discourse ("was at 15 passed, now 22/22" is genuinely ambiguous to a regex); the last matching occurrence of a given claim kind wins, which handles the common case but not every one.
+- Not NLP. It can't fully resolve tense or discourse ("was at 15 passed, now 22/22" is genuinely ambiguous to a regex); only the last claim in the entire message is checked, regardless of kind, which handles the common case (a stale count corrected later, in the same or different phrasing) but not every one (a later sentence can still describe an earlier state).
 - pytest only in v0.1. Other runners (vitest, jest, cargo test) are a real, documented gap, not a silently unsupported one.
 - The Claude Code hook only covers commits issued through the **Bash** tool specifically, since that's what `tool_input.command` requires to parse. A commit issued via a PowerShell tool call would be unchecked by this entry point. In practice this hasn't been a gap for this project's own workflow: every commit across the session this tool came out of went through Bash, including in a PowerShell-primary environment, because the heredoc pattern for multi-line commit messages is itself bash syntax.
 - The `pre-commit` hook is client-side and bypassable with `git commit --no-verify`. Pair it with the CLI invoked in CI for actual enforcement, not just a local nudge.
