@@ -53,6 +53,16 @@ def test_parses_no_tests_ran_as_zero_total_not_a_parse_error():
     assert counts.duration_s == 0.01
 
 
+def test_no_tests_ran_line_is_not_double_counted_by_the_generic_summary_regex():
+    # The generic summary regex ("... in Xs ...") also matches a
+    # "no tests ran in 0.01s" line at the exact same span, since it doesn't
+    # know about that phrasing specifically. Confirmed directly: without
+    # filtering out that overlap, aggregation counted the same line twice
+    # and doubled the reported duration (0.02 instead of the real 0.01).
+    counts = parse_summary_line(_read("no_tests_ran.txt"))
+    assert counts.duration_s == 0.01
+
+
 def test_parses_summary_with_ansi_color_codes_stripped_first():
     counts = parse_summary_line(_read("ansi_colored.txt"))
     assert counts is not None
@@ -65,13 +75,28 @@ def test_strip_ansi_removes_escape_sequences_directly():
     assert strip_ansi(colored) == "hello"
 
 
-def test_uses_last_summary_line_when_multiple_present():
-    # xdist workers print their own per-worker summary lines before the
-    # real aggregate one; only the final line is authoritative.
-    counts = parse_summary_line(_read("multiple_summary_lines.txt"))
+def test_real_pytest_xdist_output_parses_to_a_single_correct_result():
+    # Captured from an actual pytest -n 2 run, not fabricated: real xdist
+    # prints exactly one final aggregate summary line and no per-worker
+    # partial summary lines at all, confirmed directly before writing this
+    # (an earlier version of this test used a fabricated fixture with
+    # invented per-worker summary lines that real xdist never produces).
+    counts = parse_summary_line(_read("real_xdist_output.txt"))
     assert counts.failed == 1
-    assert counts.passed == 7
-    assert counts.total == 8
+    assert counts.passed == 4
+    assert counts.total == 5
+
+
+def test_multiple_summary_lines_from_piped_suites_are_aggregated_not_last_wins():
+    # The real scenario multiple summary lines actually come from: separate
+    # pytest invocations piped together, e.g.
+    # "pytest tests/unit && pytest tests/integration". A claim like
+    # "all 100 tests pass" refers to the combined total (90 + 10), not
+    # whichever suite happened to run last (which would wrongly compare
+    # against just 10).
+    counts = parse_summary_line(_read("multi_suite_piped.txt"))
+    assert counts.passed == 100
+    assert counts.total == 100
 
 
 def test_errors_only_line_excluded_from_total():
