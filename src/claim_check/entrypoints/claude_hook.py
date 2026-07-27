@@ -9,16 +9,19 @@ results.
 Fails open at every uncertain step: a non-Bash tool call, a shell-parse
 failure, an empty claim list, or a pytest crash are all treated as "allow",
 never as grounds to block. A parse failure is not evidence a claim is
-wrong, it's just evidence we couldn't check.
+wrong, it's just evidence we couldn't check. A runner_error still prints a
+warning (to stderr, not stdout: Claude Code parses stdout as JSON on exit
+0, so a plain-text warning belongs on stderr, not mixed into that).
 """
 
+import argparse
 import json
 import sys
-from typing import Optional
+from typing import Optional, Sequence
 
 from ..claims import extract_claims
 from ..compare import compare_claims
-from ..runner import run_pytest
+from ..runner import DEFAULT_TIMEOUT_S, run_pytest
 from ..shell_parser import extract_commit_message
 
 
@@ -34,7 +37,28 @@ def _deny_json(reason: str) -> str:
     )
 
 
-def main(stdin_text: Optional[str] = None) -> int:
+def _parse_args(argv: Optional[Sequence[str]]):
+    parser = argparse.ArgumentParser(prog="claim-check-claude-hook")
+    parser.add_argument(
+        "--command",
+        default=None,
+        help=(
+            "Override the test-runner command (default: '<python> -m pytest'). "
+            "Needed when this hook's own environment isn't the one with the "
+            "project's real test dependencies, e.g. --command \"poetry run pytest\"."
+        ),
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_S,
+        help=f"Kill the test run and fail open after this many seconds (default: {DEFAULT_TIMEOUT_S})",
+    )
+    return parser.parse_args(argv if argv is not None else sys.argv[1:])
+
+
+def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None) -> int:
+    args = _parse_args(argv)
     raw = stdin_text if stdin_text is not None else sys.stdin.read()
 
     try:
@@ -55,16 +79,18 @@ def main(stdin_text: Optional[str] = None) -> int:
         return 0
 
     cwd = payload.get("cwd", ".")
-    run_result = run_pytest(cwd)
+    run_result = run_pytest(cwd, timeout_s=args.timeout, command=args.command)
     verdict = compare_claims(claims, run_result.counts)
 
     if verdict.status == "mismatch":
         print(_deny_json(verdict.message))
         return 0
 
+    if verdict.status == "runner_error":
+        print(f"claim-check: WARNING - could not verify ({run_result.parse_error}); allowing commit", file=sys.stderr)
+
     # match, no_claim, or runner_error (fails open per the resolved crash
-    # policy) all allow silently: no stdout means Claude Code proceeds
-    # normally.
+    # policy) all allow: no stdout JSON means Claude Code proceeds normally.
     return 0
 
 

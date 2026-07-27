@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 81 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 96 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -36,7 +36,9 @@ Other things worth knowing about, by module:
 | An `INTERNALERROR>` crash with no summary line at all | Structurally distinct from "0 tests ran"; fails open, does not block the commit |
 | The exact `git commit -m "$(cat <<'EOF' ... EOF)"` heredoc pattern this project's own commits use | Verified end to end: extracted correctly, and a wrong claim inside it is caught |
 | Unbalanced quotes, an unresolved `$VAR` inside an unquoted heredoc, `git commit` as a substring inside an unrelated `echo` | All fail open (or are correctly ignored), a parse failure is not evidence a claim is wrong |
-| A full-suite claim checked against a deliberately scoped run (one file passed via `pytest_args`) | Documents the real, confirmed partial-run limitation described at the top of Usage, this is expected, not a bug |
+| A full-suite claim checked against a deliberately scoped run (one file passed via `pytest_args`, or a `-k` filter that deselects a failing test) | Documents the real, confirmed partial-run limitation described at the top of Usage, this is expected, not a bug |
+| `--command` pointed at a wrapper (`poetry run pytest`) that doesn't exist on the machine | Fails open with the specific missing command named, never an unhandled crash |
+| A hanging test run | Killed at the configured `--timeout`, fails open with a clear reason instead of blocking a commit (or an interactive rebase) forever |
 
 ## Usage
 
@@ -45,6 +47,8 @@ Other things worth knowing about, by module:
 > claim-check can only ever compare a claim against whatever pytest actually collects for the exact invocation it runs, in the exact directory and with the exact arguments it's given. It has no way to know what "the full suite" means to you.
 >
 > If you write "all 150 tests pass" because you genuinely ran the complete suite yourself, but claim-check's own run is narrower, because a pre-commit "only test changed files" setup passed it one file, a `pytest.ini`/`pyproject.toml` `testpaths` restriction scoped discovery to a subdirectory, a sharded CI job only ran its own slice, or you invoked the CLI with extra `pytest` args, it will see far fewer tests than 150, and it will flag your entirely honest claim as a mismatch. This is confirmed, reproducible behavior (see `test_scoping_pytest_args_to_one_file_produces_a_false_mismatch_against_a_full_suite_claim` in the test suite), not a hypothetical edge case.
+>
+> The same risk runs the other way too, and is easier to miss: a `-k` filter doesn't just narrow what's checked, it changes what "all tests pass" means. `pytest -k test_a` on a file with a passing `test_a` and a failing `test_b` reports `1 passed, 1 deselected`, a genuinely correct "all tests pass" for that scope, even though the real suite has a failure. Deselected tests are tracked separately and correctly excluded from the total (that part is right), but that's exactly what makes this spoofable: if claim-check's own invocation ends up narrower than the claim, through a stray `-k`, not just a path, it will happily confirm a claim that a full run would have contradicted. Confirmed directly (see `test_k_flag_deselection_produces_a_false_match_against_an_all_pass_claim`). Same rule applies: make sure claim-check's own invocation matches the scope the claim is actually about.
 >
 > **Always run claim-check against the same scope your claim actually refers to.** If your commit message claims something about the full suite, make sure claim-check's own invocation (its `cwd`, any extra `pytest` args, and your project's own `pytest.ini`/`pyproject.toml` test-discovery config) actually covers the full suite too, not a subset.
 
@@ -82,6 +86,28 @@ This hook runs as `language: system`, deliberately, not `language: python`: a `p
     ]
   }
 }
+```
+
+### If claim-check's own environment isn't your project's environment
+
+`language: system` (above) fixes the case where the hook runs in pre-commit's isolated virtualenv instead of yours. There's a deeper version of the same problem even outside pre-commit: by default, claim-check runs `<the Python it's installed under> -m pytest`. If claim-check itself is installed separately from your project, a pipx-style global install, or a Claude Code hook running under a different interpreter than your `poetry`/`hatch`/`pipenv`-managed project, that command can point at a Python with no pytest, or a pytest with none of your project's actual dependencies. Confirmed directly: in that situation this fails open silently, "could not verify... allowing commit", exactly as if no verification tool were installed at all, with no error to tip you off.
+
+All three entry points take a `--command` override for this: point it at whatever actually runs your tests in your real project environment.
+
+```bash
+claim-check verify-tests COMMIT_EDITMSG --command "poetry run pytest"
+claim-check-precommit COMMIT_EDITMSG --command "hatch run test"
+claim-check-claude-hook --command "poetry run pytest"   # add as extra args after the hook command in settings.json
+```
+
+If you're not sure whether this applies to you: run `claim-check verify-tests "22 passed"` (or any dummy claim) from the same shell you actually run `git commit` from. If it prints a `WARNING - could not verify (...)` with a reason mentioning a missing module or command, that's this problem, and `--command` is the fix.
+
+### Timeouts
+
+Every pytest invocation is killed after 120 seconds by default (`--timeout`, in seconds, on all three entry points), and fails open with a clear reason if it fires. This exists specifically for the `commit-msg` hook: it runs synchronously on every commit, including every commit replayed during an interactive rebase, so a hung or unexpectedly slow test run doesn't silently block one commit, it blocks the whole rebase indefinitely with no visible cause. 120 seconds is deliberately generous rather than tuned to a fast unit suite, a large but normal integration suite can legitimately take minutes, and a timeout that's too short just makes this tool silently verify nothing for every such project. Lower it if your suite is fast and you'd rather fail loudly sooner:
+
+```bash
+claim-check-precommit COMMIT_EDITMSG --timeout 30
 ```
 
 ## Install

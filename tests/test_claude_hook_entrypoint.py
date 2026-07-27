@@ -18,29 +18,29 @@ def _payload(command, tool_name="Bash", cwd="."):
 
 
 def test_non_bash_tool_is_ignored_exits_zero(capsys):
-    code = main(json.dumps({"tool_name": "Write", "tool_input": {}}))
+    code = main(json.dumps({"tool_name": "Write", "tool_input": {}}), argv=[])
     assert code == 0
     assert capsys.readouterr().out == ""
 
 
 def test_bash_command_that_is_not_a_git_commit_is_ignored(capsys):
-    code = main(_payload("npm test"))
+    code = main(_payload("npm test"), argv=[])
     assert code == 0
     assert capsys.readouterr().out == ""
 
 
 def test_git_commit_with_no_message_flag_is_ignored(capsys):
-    code = main(_payload("git commit"))
+    code = main(_payload("git commit"), argv=[])
     assert code == 0
     assert capsys.readouterr().out == ""
 
 
 def test_malformed_json_on_stdin_fails_open_without_crashing():
-    assert main("not valid json {{{") == 0
+    assert main("not valid json {{{", argv=[]) == 0
 
 
 def test_shell_parse_failure_fails_open_without_denying(capsys):
-    code = main(_payload('git commit -m "unterminated'))
+    code = main(_payload('git commit -m "unterminated'), argv=[])
     assert code == 0
     assert capsys.readouterr().out == ""
 
@@ -49,9 +49,9 @@ def test_matching_claim_allows_silently(monkeypatch, capsys):
     monkeypatch.setattr(
         claude_hook_module,
         "run_pytest",
-        lambda cwd: result_from_captured_output(0, "============ 22 passed in 0.15s ============"),
+        lambda cwd, **kwargs: result_from_captured_output(0, "============ 22 passed in 0.15s ============"),
     )
-    code = main(_payload('git commit -m "22 passed"'))
+    code = main(_payload('git commit -m "22 passed"'), argv=[])
     assert code == 0
     assert capsys.readouterr().out == ""
 
@@ -60,9 +60,9 @@ def test_mismatched_claim_denies_via_exact_json_shape(monkeypatch, capsys):
     monkeypatch.setattr(
         claude_hook_module,
         "run_pytest",
-        lambda cwd: result_from_captured_output(0, "============ 21 passed in 0.15s ============"),
+        lambda cwd, **kwargs: result_from_captured_output(0, "============ 21 passed in 0.15s ============"),
     )
-    code = main(_payload('git commit -m "22 passed"'))
+    code = main(_payload('git commit -m "22 passed"'), argv=[])
     assert code == 0
 
     output = json.loads(capsys.readouterr().out)
@@ -79,18 +79,33 @@ def test_runner_error_fails_open_does_not_deny(monkeypatch, capsys):
     monkeypatch.setattr(
         claude_hook_module,
         "run_pytest",
-        lambda cwd: result_from_captured_output(0, "INTERNALERROR> something broke"),
+        lambda cwd, **kwargs: result_from_captured_output(0, "INTERNALERROR> something broke"),
     )
-    code = main(_payload('git commit -m "22 passed"'))
+    code = main(_payload('git commit -m "22 passed"'), argv=[])
     assert code == 0
     assert capsys.readouterr().out == ""
+
+
+def test_runner_error_warning_goes_to_stderr_not_stdout(monkeypatch, capsys):
+    # Claude Code parses stdout as JSON on exit 0; a plain-text warning
+    # mixed into stdout would break that contract, so it must go to stderr.
+    monkeypatch.setattr(
+        claude_hook_module,
+        "run_pytest",
+        lambda cwd, **kwargs: result_from_captured_output(0, "INTERNALERROR> something broke"),
+    )
+    code = main(_payload('git commit -m "22 passed"'), argv=[])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "could not verify" in captured.err
 
 
 def test_handles_the_exact_heredoc_pattern_this_environment_uses(monkeypatch, capsys):
     monkeypatch.setattr(
         claude_hook_module,
         "run_pytest",
-        lambda cwd: result_from_captured_output(0, "============ 21 passed in 0.15s ============"),
+        lambda cwd, **kwargs: result_from_captured_output(0, "============ 21 passed in 0.15s ============"),
     )
     command = (
         "git commit -m \"$(cat <<'EOF'\n"
@@ -100,8 +115,35 @@ def test_handles_the_exact_heredoc_pattern_this_environment_uses(monkeypatch, ca
         "EOF\n"
         ")\""
     )
-    code = main(_payload(command))
+    code = main(_payload(command), argv=[])
     assert code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "22 passed" in output["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_command_override_is_forwarded_to_run_pytest(monkeypatch, capsys):
+    # Confirms the --command flag actually reaches run_pytest, not just
+    # that argparse accepts it.
+    seen = {}
+
+    def fake_run_pytest(cwd, **kwargs):
+        seen.update(kwargs)
+        return result_from_captured_output(0, "============ 22 passed in 0.15s ============")
+
+    monkeypatch.setattr(claude_hook_module, "run_pytest", fake_run_pytest)
+    code = main(_payload('git commit -m "22 passed"'), argv=["--command", "poetry run pytest"])
+    assert code == 0
+    assert seen["command"] == "poetry run pytest"
+
+
+def test_timeout_override_is_forwarded_to_run_pytest(monkeypatch):
+    seen = {}
+
+    def fake_run_pytest(cwd, **kwargs):
+        seen.update(kwargs)
+        return result_from_captured_output(0, "============ 22 passed in 0.15s ============")
+
+    monkeypatch.setattr(claude_hook_module, "run_pytest", fake_run_pytest)
+    main(_payload('git commit -m "22 passed"'), argv=["--timeout", "5"])
+    assert seen["timeout_s"] == 5.0
