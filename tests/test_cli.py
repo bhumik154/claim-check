@@ -54,3 +54,20 @@ def test_main_verify_tests_subcommand_end_to_end(tmp_path):
     output_file.write_text("============ 22 passed in 0.15s ============", encoding="utf-8")
     code = main(["verify-tests", "22 passed", "--pytest-output", str(output_file)])
     assert code == 0
+
+
+def test_scoping_pytest_args_to_one_file_produces_a_false_mismatch_against_a_full_suite_claim():
+    # Documents a known, real limitation (not a bug to fix - there is no
+    # general fix): claim-check can only ever compare against whatever
+    # pytest actually collects for *this* invocation. A developer who
+    # genuinely ran the full suite and honestly saw "150 passed" will be
+    # falsely flagged if the tool itself (via --cwd/pytest_args, a scoped
+    # pre-commit "only changed files" setup, a pytest.ini testpaths
+    # restriction, or a sharded CI job) only sees a subset. See the
+    # README's Usage warning: always invoke this against the same scope
+    # the claim actually refers to.
+    code = verify_tests(
+        "All 150 tests pass",
+        pytest_args=["tests/test_compare.py"],  # deliberately narrower than the claim
+    )
+    assert code == 1
