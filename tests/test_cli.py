@@ -34,6 +34,33 @@ def test_runner_error_against_captured_crash_output_still_exits_zero(tmp_path):
     assert code == 0
 
 
+def test_invalid_utf8_bytes_in_the_message_file_do_not_crash_the_cli(tmp_path):
+    # Confirmed directly: Path.read_text(encoding="utf-8") with no errors=
+    # argument raises UnicodeDecodeError on a byte invalid in UTF-8 (0x81
+    # on its own is a continuation-only byte, never valid as a standalone
+    # UTF-8 byte), which propagated uncaught and crashed the whole CLI. A
+    # pasted binary character, or a stray cp1252 quote mark from Word,
+    # in a real commit message would trigger this.
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    msg_file.write_bytes(b"22 passed \x81 corrupted")
+    output_file = tmp_path / "pytest_output.txt"
+    output_file.write_text("============ 22 passed in 0.15s ============", encoding="utf-8")
+    code = verify_tests(str(msg_file), pytest_output_file=output_file)
+    assert code == 0
+
+
+def test_missing_pytest_output_file_fails_open_instead_of_crashing(capsys):
+    # Confirmed directly: Path.read_text() on a nonexistent path raises
+    # FileNotFoundError uncaught - a real CI pipeline scenario where a
+    # prior step that was supposed to produce the captured-output file
+    # failed to run at all.
+    code = verify_tests("22 passed", pytest_output_file=Path("definitely_does_not_exist_xyz.txt"))
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "definitely_does_not_exist_xyz.txt" in out
+
+
 def test_disambiguates_a_real_file_path_from_a_literal_message():
     # The literal string below is not a path that exists, so it must be
     # treated as message text directly, not raise a file-not-found error.

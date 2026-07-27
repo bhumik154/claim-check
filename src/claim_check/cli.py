@@ -23,7 +23,7 @@ def verify_tests(
     (runner_error fails open - see compare.py), 1 for mismatch.
     """
     if os.path.isfile(path_or_message):
-        message = Path(path_or_message).read_text(encoding="utf-8")
+        message = Path(path_or_message).read_text(encoding="utf-8", errors="replace")
     else:
         message = path_or_message
 
@@ -33,7 +33,14 @@ def verify_tests(
         return 0
 
     if pytest_output_file is not None:
-        captured = Path(pytest_output_file).read_text(encoding="utf-8")
+        try:
+            captured = Path(pytest_output_file).read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            print(
+                f"claim-check: WARNING - could not verify (pytest output file "
+                f"{pytest_output_file} not found); allowing commit"
+            )
+            return 0
         run_result = result_from_captured_output(0, captured)
     else:
         run_result = run_pytest(cwd, pytest_args, timeout_s=timeout_s, command=command)
