@@ -1,3 +1,5 @@
+import sys
+
 from claim_check.entrypoints.precommit import main
 
 
@@ -17,7 +19,7 @@ def test_matching_claim_exits_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(
         precommit_module,
         "run_pytest",
-        lambda cwd: result_from_captured_output(0, "============ 22 passed in 0.15s ============"),
+        lambda cwd, **kwargs: result_from_captured_output(0, "============ 22 passed in 0.15s ============"),
     )
     assert main([str(msg_file)]) == 0
 
@@ -32,7 +34,7 @@ def test_mismatched_claim_exits_nonzero_and_aborts_the_commit(tmp_path, monkeypa
     monkeypatch.setattr(
         precommit_module,
         "run_pytest",
-        lambda cwd: result_from_captured_output(0, "============ 21 passed in 0.15s ============"),
+        lambda cwd, **kwargs: result_from_captured_output(0, "============ 21 passed in 0.15s ============"),
     )
     assert main([str(msg_file)]) == 1
 
@@ -57,6 +59,56 @@ def test_runner_error_fails_open_returns_success(tmp_path, monkeypatch):
     monkeypatch.setattr(
         precommit_module,
         "run_pytest",
-        lambda cwd: result_from_captured_output(0, "INTERNALERROR> something broke"),
+        lambda cwd, **kwargs: result_from_captured_output(0, "INTERNALERROR> something broke"),
     )
     assert main([str(msg_file)]) == 0
+
+
+def test_command_flag_reaches_a_real_subprocess_invocation(tmp_path):
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    msg_file.write_text("1 passed", encoding="utf-8")
+    (tmp_path / "test_sample.py").write_text(
+        "def test_one():\n    assert True\n", encoding="utf-8"
+    )
+    code = main(
+        [
+            str(msg_file),
+            "--cwd",
+            str(tmp_path),
+            "--command",
+            f'"{sys.executable}" -m pytest',
+        ]
+    )
+    assert code == 0
+
+
+def test_bad_command_flag_fails_open_instead_of_crashing(tmp_path):
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    msg_file.write_text("22 passed", encoding="utf-8")
+    code = main(
+        [
+            str(msg_file),
+            "--cwd",
+            str(tmp_path),
+            "--command",
+            "definitely_not_a_real_command_xyz123",
+        ]
+    )
+    assert code == 0
+
+
+def test_timeout_flag_kills_a_hanging_command_and_fails_open(tmp_path):
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    msg_file.write_text("22 passed", encoding="utf-8")
+    code = main(
+        [
+            str(msg_file),
+            "--cwd",
+            str(tmp_path),
+            "--command",
+            f'"{sys.executable}" -c "import time; time.sleep(5)"',
+            "--timeout",
+            "0.5",
+        ]
+    )
+    assert code == 0

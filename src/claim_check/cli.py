@@ -8,7 +8,7 @@ from typing import Optional, Sequence
 
 from .claims import extract_claims
 from .compare import compare_claims
-from .runner import result_from_captured_output, run_pytest
+from .runner import DEFAULT_TIMEOUT_S, result_from_captured_output, run_pytest
 
 
 def verify_tests(
@@ -16,6 +16,8 @@ def verify_tests(
     cwd: Path = Path("."),
     pytest_args: Sequence[str] = (),
     pytest_output_file: Optional[Path] = None,
+    command: Optional[str] = None,
+    timeout_s: Optional[float] = DEFAULT_TIMEOUT_S,
 ) -> int:
     """Returns a process exit code: 0 for match/no_claim/runner_error
     (runner_error fails open - see compare.py), 1 for mismatch.
@@ -34,7 +36,7 @@ def verify_tests(
         captured = Path(pytest_output_file).read_text(encoding="utf-8")
         run_result = result_from_captured_output(0, captured)
     else:
-        run_result = run_pytest(cwd, pytest_args)
+        run_result = run_pytest(cwd, pytest_args, timeout_s=timeout_s, command=command)
 
     verdict = compare_claims(claims, run_result.counts)
 
@@ -42,7 +44,7 @@ def verify_tests(
         print(f"claim-check: OK - {verdict.message}")
         return 0
     if verdict.status == "runner_error":
-        print(f"claim-check: WARNING - could not verify ({verdict.message}); allowing commit")
+        print(f"claim-check: WARNING - could not verify ({run_result.parse_error}); allowing commit")
         return 0
     print(f"claim-check: MISMATCH - {verdict.message}")
     return 1
@@ -50,7 +52,7 @@ def verify_tests(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="claim-check")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     verify_parser = subparsers.add_parser(
         "verify-tests", help="Verify test-count claims in a commit message or a file containing one"
@@ -65,17 +67,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Path to already-captured pytest output; skips running pytest again",
     )
     verify_parser.add_argument(
+        "--command",
+        default=None,
+        help=(
+            "Override the test-runner command (default: '<python> -m pytest'). "
+            "Use this if your project's dependencies live in a separate environment, "
+            "e.g. --command \"poetry run pytest\" or --command \"hatch run test\"."
+        ),
+    )
+    verify_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_S,
+        help=f"Kill the test run and fail open after this many seconds (default: {DEFAULT_TIMEOUT_S})",
+    )
+    verify_parser.add_argument(
         "pytest_args", nargs=argparse.REMAINDER, help="Extra arguments passed through to pytest"
     )
 
     args = parser.parse_args(argv)
 
-    if args.command == "verify-tests":
+    if args.subcommand == "verify-tests":
         return verify_tests(
             args.path_or_message,
             cwd=Path(args.cwd),
             pytest_args=args.pytest_args,
             pytest_output_file=Path(args.pytest_output) if args.pytest_output else None,
+            command=args.command,
+            timeout_s=args.timeout,
         )
     return 1
 
