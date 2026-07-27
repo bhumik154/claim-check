@@ -36,15 +36,24 @@ def _is_negated(message: str, match_start: int) -> bool:
 
 
 def extract_claims(message: str) -> list[Claim]:
-    """Returns at most one Claim per kind. When the same kind appears more
-    than once with conflicting numbers (a stale count restated later in the
-    same message, then corrected), the last occurrence in the text wins -
-    later statements are the more likely current-state claim. This does not
-    resolve genuine tense/discourse ambiguity; see the README.
+    """Returns at most one Claim: the last one found in the message, by
+    starting position, regardless of kind. compare.py checks every returned
+    claim against a single pytest run, so two claims with different kinds
+    or numbers can't both be true at once - confirmed directly, "14 passed.
+    Fixed the bug, now 15/15 tests pass!" is a stale count restated and
+    corrected using different phrasing (n_passed then n_of_m), not a real
+    contradiction, and returning both flagged an honest correction as a
+    mismatch. Keeping only the last claim in the text is the same
+    last-occurrence-wins principle as before, just applied globally instead
+    of per kind. This does not resolve genuine tense/discourse ambiguity
+    (a later sentence describing an earlier state is still possible); see
+    the README.
     """
     candidates: list[Claim] = []
 
     for m in _N_PASSED_RE.finditer(message):
+        if _is_negated(message, m.start()):
+            continue
         candidates.append(
             Claim(
                 kind="n_passed",
@@ -56,6 +65,8 @@ def extract_claims(message: str) -> list[Claim]:
         )
 
     for m in _N_OF_M_RE.finditer(message):
+        if _is_negated(message, m.start()):
+            continue
         candidates.append(
             Claim(
                 kind="n_of_m",
@@ -80,10 +91,7 @@ def extract_claims(message: str) -> list[Claim]:
             )
         )
 
-    last_by_kind: dict[str, Claim] = {}
-    for claim in candidates:
-        existing = last_by_kind.get(claim.kind)
-        if existing is None or claim.span[0] > existing.span[0]:
-            last_by_kind[claim.kind] = claim
+    if not candidates:
+        return []
 
-    return sorted(last_by_kind.values(), key=lambda c: c.span[0])
+    return [max(candidates, key=lambda c: c.span[0])]
