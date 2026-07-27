@@ -137,6 +137,26 @@ def test_command_override_is_forwarded_to_run_pytest(monkeypatch, capsys):
     assert seen["command"] == "poetry run pytest"
 
 
+def test_interactive_stdin_exits_immediately_instead_of_hanging(monkeypatch):
+    # Claude Code always pipes the hook JSON in (a piped stdin reports
+    # isatty() == False, confirmed directly), so this never fires in real
+    # use. It guards against a developer running the bare command in an
+    # interactive terminal, which would otherwise block on stdin.read()
+    # waiting for input that never arrives. Faking isatty() == True and
+    # making read() raise if called proves the read is skipped entirely,
+    # not just that the eventual result happens to be 0.
+    class _FakeTTYStdin:
+        def isatty(self):
+            return True
+
+        def read(self):
+            raise AssertionError("stdin.read() must not be called when isatty() is True")
+
+    monkeypatch.setattr(claude_hook_module.sys, "stdin", _FakeTTYStdin())
+    code = main(argv=[])
+    assert code == 0
+
+
 def test_timeout_override_is_forwarded_to_run_pytest(monkeypatch):
     seen = {}
 

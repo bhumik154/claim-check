@@ -49,6 +49,17 @@ def test_utf8_decode_error_fails_open_returns_success(tmp_path):
     assert main([str(msg_file)]) == 0
 
 
+def test_missing_input_file_fails_open_instead_of_crashing(capsys):
+    # Confirmed directly: open() on a nonexistent path raises
+    # FileNotFoundError uncaught when only UnicodeDecodeError is caught.
+    # git and pre-commit always pass a real COMMIT_EDITMSG path, but a
+    # developer manually testing this hook from a terminal with a typo'd
+    # path shouldn't get an unhandled traceback for it.
+    code = main(["definitely_does_not_exist_xyz.txt"])
+    assert code == 0
+    assert "missing" in capsys.readouterr().out
+
+
 def test_runner_error_fails_open_returns_success(tmp_path, monkeypatch):
     msg_file = tmp_path / "COMMIT_EDITMSG"
     msg_file.write_text("22 passed", encoding="utf-8")

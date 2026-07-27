@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 105 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 107 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -44,6 +44,8 @@ Other things worth knowing about, by module:
 | A test suite output containing a byte invalid in the platform's default text encoding (confirmed on Windows with `pytest -s`, where the locale default is often `cp1252`, not UTF-8) | Decoded as UTF-8 with invalid bytes replaced, not left to crash the whole process; the default (non-`-s`) case is already safe, since pytest's own capture machinery re-encodes captured output before ever printing it |
 | A commit message file containing a byte invalid in UTF-8 (a pasted binary character, a stray `cp1252` quote mark from Word) | Read with invalid bytes replaced rather than crashing the CLI outright |
 | `--pytest-output` pointed at a file that doesn't exist (a CI pipeline where the step that should have produced it failed) | Fails open with a specific warning naming the missing file, not an unhandled traceback |
+| `claim-check-precommit` invoked manually with a nonexistent or unreadable commit-message path | Fails open with a clear message, not an unhandled `FileNotFoundError` |
+| `claim-check-claude-hook` invoked manually in an interactive terminal, with no piped input | Exits immediately instead of hanging on `stdin.read()`; never triggers under real Claude Code use, since a piped stdin reports `isatty() == False` |
 
 ## Usage
 

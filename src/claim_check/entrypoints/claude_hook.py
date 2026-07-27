@@ -59,6 +59,15 @@ def _parse_args(argv: Optional[Sequence[str]]):
 
 def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None) -> int:
     args = _parse_args(argv)
+
+    if stdin_text is None and sys.stdin.isatty():
+        # Claude Code always pipes the hook JSON in (confirmed: a piped
+        # stdin reports isatty() == False), so this never fires in real
+        # use. It only catches a developer running the command bare in an
+        # interactive terminal, which would otherwise hang indefinitely
+        # waiting for input that's never coming.
+        return 0
+
     raw = stdin_text if stdin_text is not None else sys.stdin.read()
 
     try:
