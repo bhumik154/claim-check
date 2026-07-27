@@ -47,8 +47,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         with open(args.input, encoding="utf-8") as f:
             message = f.read()
-    except UnicodeDecodeError:
-        print("claim-check: commit message file is not valid UTF-8; skipping verification")
+    except (UnicodeDecodeError, OSError):
+        # UnicodeDecodeError: corrupted bytes, not evidence a claim is wrong.
+        # OSError (covers FileNotFoundError, PermissionError, etc.): git and
+        # pre-commit always pass a real COMMIT_EDITMSG path, but a developer
+        # manually testing this hook from a terminal with a typo'd or
+        # nonexistent path shouldn't get an unhandled traceback for it.
+        print("claim-check: commit message file missing or not valid UTF-8; skipping verification")
         return RESULT_SUCCESS
 
     claims = extract_claims(message)
