@@ -92,6 +92,35 @@ def test_multiple_claims_all_correct_yields_match():
     assert verdict.status == "match"
 
 
+def test_n_passed_claim_with_an_error_present_is_flagged_even_though_the_count_is_literally_correct():
+    # Confirmed against real pytest: a broken fixture on one test doesn't
+    # stop the other 22 from running, producing an entirely ordinary-
+    # looking "22 passed, 1 error" summary. "22 passed" is literally true,
+    # but the true denominator is unknown - an error means some test never
+    # got a chance to pass or fail. Before the errors>0 guard was added,
+    # this compared 22 == 22 and returned a silent match.
+    verdict = compare_claims([_n_passed(22)], _counts(passed=22, errors=1))
+    assert verdict.status == "mismatch"
+    assert "error" in verdict.message
+
+
+def test_all_tests_pass_claim_with_zero_failures_but_an_error_present_is_flagged():
+    verdict = compare_claims([_all_pass()], _counts(passed=17, failed=0, errors=1))
+    assert verdict.status == "mismatch"
+
+
+def test_n_of_m_claim_with_an_error_present_is_flagged_even_when_n_and_m_both_match():
+    verdict = compare_claims([_n_of_m(20, 20)], _counts(passed=20, failed=0, errors=1))
+    assert verdict.status == "mismatch"
+
+
+def test_zero_errors_does_not_trigger_the_error_guard():
+    # The guard must key specifically on errors > 0, not merely exist -
+    # ordinary passing runs (errors=0, the default) must be unaffected.
+    verdict = compare_claims([_n_passed(22)], _counts(passed=22, errors=0))
+    assert verdict.status == "match"
+
+
 def test_runner_error_yields_runner_error_status_not_mismatch():
     verdict = compare_claims([_n_passed(22)], None)
     assert verdict.status == "runner_error"

@@ -81,17 +81,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=DEFAULT_TIMEOUT_S,
         help=f"Kill the test run and fail open after this many seconds (default: {DEFAULT_TIMEOUT_S})",
     )
-    verify_parser.add_argument(
-        "pytest_args", nargs=argparse.REMAINDER, help="Extra arguments passed through to pytest"
-    )
-
-    args = parser.parse_args(argv)
+    # Deliberately not nargs=REMAINDER: that swallows every token after the
+    # first positional, including claim-check's own --cwd/--command/
+    # --timeout, into pytest_args instead of parsing them - confirmed
+    # directly, "verify-tests MSG --cwd X" silently left cwd at its default
+    # and passed "--cwd X" through to pytest itself as bogus arguments.
+    # parse_known_args lets argparse recognize claim-check's own flags in
+    # any position and treats only genuinely-unknown tokens (a pytest path,
+    # -k, etc.) as passthrough.
+    args, pytest_args = parser.parse_known_args(argv)
 
     if args.subcommand == "verify-tests":
         return verify_tests(
             args.path_or_message,
             cwd=Path(args.cwd),
-            pytest_args=args.pytest_args,
+            pytest_args=pytest_args,
             pytest_output_file=Path(args.pytest_output) if args.pytest_output else None,
             command=args.command,
             timeout_s=args.timeout,

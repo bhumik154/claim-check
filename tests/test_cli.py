@@ -74,10 +74,14 @@ def test_scoping_pytest_args_to_one_file_produces_a_false_mismatch_against_a_ful
     assert code == 1
 
 
-def test_command_flag_reaches_a_real_subprocess_invocation(tmp_path):
+def test_command_flag_reaches_a_real_subprocess_invocation(tmp_path, capsys):
     # Confirms --command is parsed by argparse *and* forwarded all the way
     # to the real subprocess call, using an actual custom test suite rather
-    # than a mocked run_pytest.
+    # than a mocked run_pytest. Asserting only code == 0 isn't enough here:
+    # a totally broken invocation (see the two flag-order regression tests
+    # below) also fails open with code 0, so this checks the specific "OK"
+    # message too, confirming a genuine verified match, not a silent
+    # fail-open masquerading as one.
     (tmp_path / "test_sample.py").write_text(
         "def test_one():\n    assert True\n", encoding="utf-8"
     )
@@ -92,9 +96,12 @@ def test_command_flag_reaches_a_real_subprocess_invocation(tmp_path):
         ]
     )
     assert code == 0
+    out = capsys.readouterr().out
+    assert "claim-check: OK" in out
+    assert "WARNING" not in out
 
 
-def test_bad_command_flag_fails_open_instead_of_crashing_the_cli(tmp_path):
+def test_bad_command_flag_fails_open_instead_of_crashing_the_cli(tmp_path, capsys):
     code = main(
         [
             "verify-tests",
@@ -106,6 +113,33 @@ def test_bad_command_flag_fails_open_instead_of_crashing_the_cli(tmp_path):
         ]
     )
     assert code == 0
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "definitely_not_a_real_command_xyz123" in out
+
+
+def test_cwd_flag_after_the_positional_message_is_actually_respected(tmp_path, capsys):
+    # Regression test for a real bug found while reviewing this exact
+    # feature: verify_parser's pytest_args used nargs=argparse.REMAINDER,
+    # which swallows every token after the first positional - including
+    # claim-check's own --cwd/--command/--timeout - into pytest_args
+    # instead of parsing them. Confirmed directly: "verify-tests MSG --cwd
+    # X" silently left cwd at its default "." and passed "--cwd X" through
+    # to pytest itself as unrecognized arguments, which then failed open
+    # with a generic parse error that happened to also produce exit code
+    # 0 - so a naive "code == 0" assertion couldn't tell a real success
+    # from this silent failure. Fixed via parse_known_args instead of
+    # REMAINDER. This test would have passed against the broken code too
+    # if it only checked the exit code; checking the exact "OK" message
+    # and the absence of "WARNING" is what actually catches the bug.
+    (tmp_path / "test_sample.py").write_text(
+        "def test_one():\n    assert True\n", encoding="utf-8"
+    )
+    code = main(["verify-tests", "1 passed", "--cwd", str(tmp_path)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "claim-check: OK" in out
+    assert "WARNING" not in out
 
 
 def test_k_flag_deselection_produces_a_false_match_against_an_all_pass_claim(tmp_path):
@@ -138,7 +172,7 @@ def test_k_flag_deselection_produces_a_false_match_against_an_all_pass_claim(tmp
     assert code == 0
 
 
-def test_timeout_flag_reaches_run_pytest_and_kills_a_hanging_command(tmp_path):
+def test_timeout_flag_reaches_run_pytest_and_kills_a_hanging_command(tmp_path, capsys):
     code = main(
         [
             "verify-tests",
@@ -152,3 +186,30 @@ def test_timeout_flag_reaches_run_pytest_and_kills_a_hanging_command(tmp_path):
         ]
     )
     assert code == 0
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "0.5" in out
+
+
+def test_broken_fixture_alongside_passing_tests_is_flagged_not_silently_matched(tmp_path):
+    # Confirmed against real pytest: a fixture that raises during setup
+    # doesn't stop the rest of the suite. 22 genuinely passing tests plus
+    # one broken fixture produces a completely ordinary-looking
+    # "22 passed, 1 error" summary, no special flags needed. A bare
+    # "22 passed" claim is literally accurate about the tests that ran,
+    # but the true denominator is unknown (the failing-fixture test never
+    # got a chance to pass or fail), which is exactly the false confidence
+    # this tool exists to catch.
+    lines = "\n".join(f"def test_{i}():\n    assert True\n" for i in range(22))
+    (tmp_path / "test_api.py").write_text(lines, encoding="utf-8")
+    (tmp_path / "test_auth.py").write_text(
+        "import pytest\n\n"
+        "@pytest.fixture\n"
+        "def broken_fixture():\n"
+        "    raise RuntimeError(\"setup blew up\")\n\n"
+        "def test_broken(broken_fixture):\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    code = main(["verify-tests", "Refactored API logic, 22 passed.", "--cwd", str(tmp_path)])
+    assert code == 1

@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 96 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 102 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -39,6 +39,8 @@ Other things worth knowing about, by module:
 | A full-suite claim checked against a deliberately scoped run (one file passed via `pytest_args`, or a `-k` filter that deselects a failing test) | Documents the real, confirmed partial-run limitation described at the top of Usage, this is expected, not a bug |
 | `--command` pointed at a wrapper (`poetry run pytest`) that doesn't exist on the machine | Fails open with the specific missing command named, never an unhandled crash |
 | A hanging test run | Killed at the configured `--timeout`, fails open with a clear reason instead of blocking a commit (or an interactive rebase) forever |
+| A bare `"22 passed"` claim against a real run that also reported a collection or fixture-setup error | Flagged as a mismatch, not silently matched: an error means some test never got a chance to pass or fail, so the true denominator is unknown even though the passed count is technically accurate |
+| `claim-check verify-tests MSG --cwd X --command Y` (claim-check's own flags placed *after* the positional message) | Confirmed correctly parsed regardless of position; a prior version of this parser using `argparse.REMAINDER` silently swallowed everything after the message into pytest passthrough args instead |
 
 ## Usage
 
@@ -60,6 +62,9 @@ claim-check verify-tests path/to/COMMIT_EDITMSG
 claim-check verify-tests "22 passed"
 # reuse output you already captured instead of re-running the suite:
 claim-check verify-tests path/to/COMMIT_EDITMSG --pytest-output pytest_output.txt
+# claim-check's own flags (--cwd, --command, --timeout, --pytest-output) can go
+# before or after the message; anything else is passed through to pytest itself:
+claim-check verify-tests "22 passed" --cwd backend/ -k "not slow"
 ```
 
 **pre-commit** (see [`examples/pre-commit-config-snippet.yaml`](examples/pre-commit-config-snippet.yaml)):
