@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 110 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 147 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -47,6 +47,14 @@ Other things worth knowing about, by module:
 | `--pytest-output` pointed at a file that doesn't exist (a CI pipeline where the step that should have produced it failed) | Fails open with a specific warning naming the missing file, not an unhandled traceback |
 | `claim-check-precommit` invoked manually with a nonexistent or unreadable commit-message path | Fails open with a clear message, not an unhandled `FileNotFoundError` |
 | `claim-check-claude-hook` invoked manually in an interactive terminal, with no piped input | Exits immediately instead of hanging on `stdin.read()`; never triggers under real Claude Code use, since a piped stdin reports `isatty() == False` |
+| A ratio claim spelled `"22/22 passed"` rather than `"22/22 tests pass"` | Both are the same claim and both check the denominator; the bare-count regex matches the contained substring `"22 passed"` at a later offset, and last-start-wins used to pick it, silently dropping the total |
+| `"not 22/22 passed"`, `"never 9/9 passed"` (negation before a ratio spelled `passed`) | Never registers as a claim; enclosed matches are discarded before the negation filter runs, or the contained bare-count match survives a negation that applied to the phrase as a whole |
+| `"1,022 passed"` (a grouped thousands separator) | Not read as a claim of 22; the lookbehind blocks `,` alongside `.`, `#` and digits |
+| A summary line printed by a test and replayed in pytest's failure report | Cannot forge the tally: the last summary line *per session* is authoritative, and a test's output is always replayed before its own session's summary |
+| A line shaped like `"deploy finished in 1.2.3s"` in captured output | Not a summary line, and never a crash; the duration pattern is a strict number rather than any run of digits and dots |
+| A 60,000-character separator line in captured output | Parsed in linear time; the previous pattern backtracked quadratically and took 12 seconds inside the commit-msg hook, which `--timeout` does not cover |
+| `git -C <path> commit`, `git --no-pager commit` | Verified; git's own global options are skipped when locating the subcommand |
+| A nonexistent `--cwd`, an unbalanced quote in `--command`, a malformed Claude Code hook payload | All fail open with a specific reason; every entry point also has a catch-all so no internal error can ever block a commit |
 
 ## Usage
 
@@ -121,6 +129,8 @@ Every pytest invocation is killed after 120 seconds by default (`--timeout`, in 
 claim-check-precommit COMMIT_EDITMSG --timeout 30
 ```
 
+`--timeout` must be greater than zero; `0` and negative values are rejected with an error rather than accepted. This is a deliberate exception to this tool's fail-open rule: a non-positive timeout kills every run the instant it starts and then fails open, so the tool prints "could not verify ... allowing commit" on every commit forever while looking like it is working. Silently verifying nothing is worse than a loud error about a mistyped flag.
+
 ## Install
 
 ```bash
@@ -137,6 +147,9 @@ Zero runtime dependencies.
 - pytest only in v0.1. Other runners (vitest, jest, cargo test) are a real, documented gap, not a silently unsupported one.
 - The Claude Code hook only covers commits issued through the **Bash** tool specifically, since that's what `tool_input.command` requires to parse. A commit issued via a PowerShell tool call would be unchecked by this entry point. In practice this hasn't been a gap for this project's own workflow: every commit across the session this tool came out of went through Bash, including in a PowerShell-primary environment, because the heredoc pattern for multi-line commit messages is itself bash syntax.
 - The `pre-commit` hook is client-side and bypassable with `git commit --no-verify`. Pair it with the CLI invoked in CI for actual enforcement, not just a local nudge.
+- Not proof against a test that deliberately forges a whole pytest session. Output printed by a test is replayed inside pytest's failure report, which always precedes that session's real summary line, so the last-line-per-session rule defeats the realistic case: a forged session header printed *before* a forged summary line is safe, because the real header closes out the segment and the real trailing summary wins. But a forged summary line printed *before* a forged session header is believed instead, because that second, fake header closes the segment right after the forged line, making the forged line that segment's last line. Anything able to make a test print output in that specific order can already edit the test suite directly.
+- Still flags an honest claim that names an error alongside its count. `"22 passed, 1 error"` against a real 22-passed-1-error run is reported as a mismatch, because an error means some test never ran and the true denominator is unknown. The strictness is deliberate: it is the guarantee that makes a bare count meaningful at all.
+- Only `git commit` invoked as `git [global options] commit`. A leading wrapper (`sudo git commit`, `env FOO=1 git commit`) is not recognised and goes unverified.
 
 ## Where this came from
 
