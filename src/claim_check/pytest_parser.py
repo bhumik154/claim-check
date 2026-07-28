@@ -5,10 +5,18 @@ summary line is pytest's own authoritative tally and is what a human or an
 agent reading pytest's output would actually be quoting from.
 
 Scanning is line-based and segmented on pytest's session header rather than
-regex-scanning the whole stream at once. That is what makes the result
-trustworthy: a test's own stdout is replayed inside pytest's failure report,
-which always precedes that session's real summary line, so taking the last
-summary line per session means test output can never forge the tally.
+regex-scanning the whole stream at once. That is what defeats the realistic
+case: a test's own stdout is replayed inside pytest's failure report, which
+always precedes that session's real summary line, so taking the last summary
+line per session means an accidental or copy-pasted stray summary-shaped
+line in a test's output can't win. It is not an absolute guarantee, though:
+a forged summary line followed by a forged session header IS believed, since
+the forged header closes the segment right after the forged line, making it
+that segment's last line. See the "What this is not" section of the README
+and the pinned tests in tests/test_pytest_parser.py
+(test_forged_header_before_forged_summary_is_safe_real_count_wins and
+test_forged_summary_before_forged_header_is_a_documented_limitation_not_a_regression)
+for the exact boundary of what this defends against.
 """
 
 import re
@@ -104,9 +112,14 @@ def parse_summary_line(pytest_output: str) -> Optional[PytestCounts]:
     combined total.
 
     Taking the last line per segment rather than summing every match is
-    what stops a test from forging the tally: pytest replays a failing
+    what defeats the realistic forgery case: pytest replays a failing
     test's captured stdout inside the FAILURES report, which is printed
-    before the summary, so a line a test prints can never be last.
+    before the summary, so a line a test prints can't be last - and
+    therefore can't count - within its own session. This is not an
+    absolute guarantee: a forged summary line followed by a forged session
+    header IS believed, because the forged header ends the segment the
+    forged line lives in. See the README's "What this is not" section and
+    the pinned tests in tests/test_pytest_parser.py for the exact boundary.
 
     Output with no session header anywhere is treated as one segment, which
     covers a log captured mid-stream or trimmed before being handed to

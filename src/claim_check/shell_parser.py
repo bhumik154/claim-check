@@ -83,13 +83,23 @@ def _split_into_segments(tokens: list) -> list:
 # git's own global options, which may appear between "git" and the
 # subcommand. Only the ones that take a separate value need the two-token
 # skip; the "--flag=value" forms are a single token.
-_GIT_GLOBAL_FLAGS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--exec-path", "--namespace"}
+_GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--exec-path",
+    "--namespace",
+    "--config-env",
+}
 _GIT_GLOBAL_BOOLEAN_FLAGS = {
     "--no-pager",
     "--paginate",
     "--bare",
     "--literal-pathspecs",
     "--no-replace-objects",
+    "--no-optional-locks",
+    "-P",
 }
 
 

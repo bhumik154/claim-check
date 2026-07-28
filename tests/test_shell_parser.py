@@ -115,6 +115,14 @@ def test_git_global_flags_before_the_subcommand_are_skipped():
     assert extract_commit_message('git --git-dir=/r/.git commit -m "22 passed"') == "22 passed"
 
 
+def test_no_optional_locks_global_flag_is_skipped():
+    # --no-optional-locks was in neither global-flag set, so
+    # "git --no-optional-locks commit -m ..." returned None and went
+    # entirely unverified - fails open, so it's safe, but it's a silent
+    # hole in exactly the flow the Claude Code hook targets.
+    assert extract_commit_message('git --no-optional-locks commit -m "22 passed"') == "22 passed"
+
+
 def test_git_word_without_a_commit_subcommand_is_still_ignored():
     assert extract_commit_message('git -C /repo status') is None
     assert extract_commit_message('echo "git commit -m \\"22 passed\\""') is None
