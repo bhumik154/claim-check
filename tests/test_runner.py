@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from claim_check.runner import run_pytest
+from claim_check.runner import result_from_captured_output, run_pytest
 
 
 def _write_passing_test(tmp_path):
@@ -75,3 +75,73 @@ def test_a_byte_invalid_in_the_locale_encoding_does_not_crash_the_whole_process(
     assert result.returncode == 0
     assert result.counts is not None
     assert result.counts.passed == 1
+
+
+from claim_check._args import positive_timeout
+import argparse
+
+
+def test_nonexistent_working_directory_fails_open_naming_the_directory(tmp_path):
+    # Only FileNotFoundError was caught. Windows raises NotADirectoryError
+    # for a bad cwd, so this crashed with an unhandled traceback - and in
+    # the commit-msg hook a traceback means a nonzero exit, which aborts an
+    # entirely honest commit. On Linux it was caught but blamed the wrong
+    # thing: "could not find or run the test command: '<python>'".
+    missing = tmp_path / "no-such-dir"
+    result = run_pytest(missing, timeout_s=20)
+    assert result.counts is None
+    assert "no-such-dir" in result.parse_error
+
+
+def test_working_directory_that_is_a_file_fails_open(tmp_path):
+    target = tmp_path / "notadir.txt"
+    target.write_text("x", encoding="utf-8")
+    result = run_pytest(target, timeout_s=20)
+    assert result.counts is None
+    assert result.parse_error is not None
+
+
+def test_none_working_directory_falls_back_to_the_current_directory(tmp_path):
+    _write_passing_test(tmp_path)
+    result = run_pytest(None, pytest_args=[str(tmp_path)], timeout_s=60)
+    assert result.counts is not None
+    assert result.counts.passed == 2
+
+
+def test_unbalanced_quote_in_command_fails_open_instead_of_crashing(tmp_path):
+    # shlex.split sat outside the try block, so a plain quoting typo in
+    # --command raised ValueError: No closing quotation and blocked the
+    # commit. The README itself tells people to quote this flag.
+    result = run_pytest(tmp_path, command='poetry "run pytest', timeout_s=20)
+    assert result.counts is None
+    assert "run pytest" in result.parse_error or "quot" in result.parse_error.lower()
+
+
+def test_whitespace_only_command_fails_open_instead_of_crashing(tmp_path):
+    # shlex.split("   ") returns [], and subprocess.run([]) raised
+    # OSError [WinError 87]; base_command[0] in the error handler would
+    # have raised IndexError on top of it.
+    result = run_pytest(tmp_path, command="   ", timeout_s=20)
+    assert result.counts is None
+    assert result.parse_error is not None
+
+
+def test_positive_timeout_rejects_zero_and_negative_values():
+    # --timeout 0 silently killed every run instantly and failed open,
+    # reporting "did not finish within 0s" - a tool that verifies nothing
+    # while looking like it works is the worst possible outcome here, so
+    # this is a deliberate exception to the fail-open rule.
+    assert positive_timeout("30") == 30.0
+    for bad in ("0", "-5"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            positive_timeout(bad)
+
+
+def test_positive_timeout_rejects_unparseable_values():
+    with pytest.raises(argparse.ArgumentTypeError):
+        positive_timeout("abc")
+
+
+def test_captured_output_helper_tolerates_non_string_input():
+    assert result_from_captured_output(0, None).counts is None
+    assert result_from_captured_output(0, b"==== 1 passed in 1.0s ====").counts.passed == 1
