@@ -132,3 +132,12 @@ def test_runner_error_with_no_claim_present_still_yields_no_claim_not_runner_err
     # the first place, independent of whether a run even happened.
     verdict = compare_claims([], None)
     assert verdict.status == "no_claim"
+
+
+def test_zero_of_zero_claim_with_zero_collected_tests_is_flagged_like_all_pass_is():
+    # "all tests pass" against 0 collected is already flagged as vacuous.
+    # "0/0 tests pass" describes the identical situation and was matching,
+    # so the same claim passed or failed depending only on phrasing.
+    verdict = compare_claims([_n_of_m(0, 0)], _counts(passed=0, failed=0))
+    assert verdict.status == "mismatch"
+    assert "0 tests were collected" in verdict.message
