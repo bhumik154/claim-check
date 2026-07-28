@@ -135,3 +135,68 @@ def test_last_claim_wins_when_the_same_kind_repeats_with_conflicting_numbers():
     claims = extract_claims(message)
     assert len(claims) == 1
     assert claims[0].claimed_passed == 22
+
+
+def test_ratio_claim_spelled_passed_is_not_degraded_to_a_bare_count_claim():
+    # Confirmed bypass: "22/22 passed" produced n_passed(22) instead of
+    # n_of_m(22, 22), because _N_PASSED_RE matches the contained substring
+    # "22 passed" at a LATER start offset than the enclosing _N_OF_M_RE
+    # match, and last-start-wins picked the contained one. The denominator
+    # was silently discarded, so a real run of 22 passed + 1 failed
+    # verified this claim as true and let the commit through.
+    claims = extract_claims("22/22 passed")
+    assert len(claims) == 1
+    assert claims[0].kind == "n_of_m"
+    assert claims[0].claimed_passed == 22
+    assert claims[0].claimed_total == 22
+
+
+def test_ratio_claim_numerator_is_the_pass_count_not_the_denominator():
+    # The same overlap read the DENOMINATOR as the pass count: "22/25
+    # passed" parsed as n_passed(25). That both false-accepted a lie
+    # (real 25 passed -> "match") and false-blocked an honest claim
+    # (real 22 passed -> 'claimed "25 passed" but 22 actually passed').
+    claims = extract_claims("22/25 passed")
+    assert len(claims) == 1
+    assert claims[0].kind == "n_of_m"
+    assert claims[0].claimed_passed == 22
+    assert claims[0].claimed_total == 25
+
+
+def test_negated_ratio_claim_spelled_passed_is_not_treated_as_a_claim():
+    # The negation guard was defeated by the same overlap. The n_of_m match
+    # at offset 4 was correctly dropped as negated, but the contained
+    # "22 passed" starts at offset 7, where the 20-character lookback window
+    # is "not 22/" - no adjacent negation - so it survived and registered a
+    # claim. A message asserting the OPPOSITE of a claim then blocked an
+    # honest commit. Containment resolution must run BEFORE the negation
+    # filter for this to work.
+    assert extract_claims("not 22/22 passed") == []
+
+
+def test_negated_ratio_claim_with_never_is_not_treated_as_a_claim():
+    assert extract_claims("never 9/9 passed") == []
+
+
+def test_thousands_separator_is_not_misread_as_a_smaller_count():
+    # "1,022 passed" parsed as 22 (from the substring "022 passed"): the
+    # lookbehind blocked ".", "#" and digits, but not ",". An honest claim
+    # about a 1022-test suite was flagged as a mismatch.
+    claims = extract_claims("1,022 passed")
+    assert claims == []
+
+
+def test_negation_expressed_as_a_contraction_is_honoured():
+    # The "n't" branch of the negation regex was unreachable: \b never holds
+    # before the "n" of "doesn't"/"didn't"/"isn't", since both neighbours
+    # are word characters.
+    assert extract_claims("it doesn't 22 passed") == []
+    assert extract_claims("that isn't 22 passed") == []
+
+
+def test_comma_before_a_genuine_claim_still_registers():
+    # Guard against over-correcting the thousands-separator fix: a comma
+    # separated by whitespace is ordinary prose, not a digit grouping.
+    claims = extract_claims("took 3.5s, 22 passed")
+    assert len(claims) == 1
+    assert claims[0].claimed_passed == 22
