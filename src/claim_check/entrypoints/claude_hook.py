@@ -17,8 +17,10 @@ warning (to stderr, not stdout: Claude Code parses stdout as JSON on exit
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Optional, Sequence
 
+from .._args import positive_timeout
 from ..claims import extract_claims
 from ..compare import compare_claims
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
@@ -50,16 +52,24 @@ def _parse_args(argv: Optional[Sequence[str]]):
     )
     parser.add_argument(
         "--timeout",
-        type=float,
+        type=positive_timeout,
         default=DEFAULT_TIMEOUT_S,
         help=f"Kill the test run and fail open after this many seconds (default: {DEFAULT_TIMEOUT_S})",
     )
     return parser.parse_args(argv if argv is not None else sys.argv[1:])
 
 
-def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None) -> int:
-    args = _parse_args(argv)
+def _resolve_cwd(payload: dict) -> str:
+    """payload.get("cwd", ".") returns None when the key is present and
+    explicitly null, which reached subprocess as the literal directory
+    "None"."""
+    cwd = payload.get("cwd")
+    if isinstance(cwd, str) and Path(cwd).is_dir():
+        return cwd
+    return "."
 
+
+def _run(stdin_text: Optional[str], args) -> int:
     if stdin_text is None and sys.stdin.isatty():
         # Claude Code always pipes the hook JSON in (confirmed: a piped
         # stdin reports isatty() == False), so this never fires in real
@@ -78,7 +88,17 @@ def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None)
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
         return 0
 
-    command = payload.get("tool_input", {}).get("command", "")
+    # Every field below is type-guarded rather than trusted. Claude Code
+    # sends a well-formed payload today, but an unhandled AttributeError or
+    # TypeError here contradicts this module's whole contract.
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return 0
+
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return 0
+
     message = extract_commit_message(command)
     if message is None:
         return 0
@@ -87,8 +107,7 @@ def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None)
     if not claims:
         return 0
 
-    cwd = payload.get("cwd", ".")
-    run_result = run_pytest(cwd, timeout_s=args.timeout, command=args.command)
+    run_result = run_pytest(_resolve_cwd(payload), timeout_s=args.timeout, command=args.command)
     verdict = compare_claims(claims, run_result.counts)
 
     if verdict.status == "mismatch":
@@ -101,6 +120,22 @@ def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None)
     # match, no_claim, or runner_error (fails open per the resolved crash
     # policy) all allow: no stdout JSON means Claude Code proceeds normally.
     return 0
+
+
+def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None) -> int:
+    args = _parse_args(argv)
+    try:
+        return _run(stdin_text, args)
+    except Exception as exc:  # noqa: BLE001 - deliberate catch-all backstop
+        # Nothing this hook can hit internally is evidence a claim is wrong.
+        # Argument parsing is deliberately left outside this guard: a
+        # mistyped flag is a configuration error, and a hook that silently
+        # ignores its own misconfiguration verifies nothing forever.
+        print(
+            f"claim-check: WARNING - could not verify (internal error: {exc!r}); allowing commit",
+            file=sys.stderr,
+        )
+        return 0
 
 
 if __name__ == "__main__":

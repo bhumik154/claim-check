@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+from ._args import positive_timeout
 from .claims import extract_claims
 from .compare import compare_claims
 from .runner import DEFAULT_TIMEOUT_S, result_from_captured_output, run_pytest
@@ -21,7 +22,29 @@ def verify_tests(
 ) -> int:
     """Returns a process exit code: 0 for match/no_claim/runner_error
     (runner_error fails open - see compare.py), 1 for mismatch.
+
+    Every internal failure returns 0 with a warning rather than raising.
+    This shares its policy with the two hook entry points: a crash is not
+    evidence a claim is wrong, and the CLI is also invoked from hooks and
+    CI wrappers where a traceback would read as a verification failure.
     """
+    try:
+        return _verify_tests(
+            path_or_message, cwd, pytest_args, pytest_output_file, command, timeout_s
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberate catch-all backstop
+        print(f"claim-check: WARNING - could not verify (internal error: {exc!r}); allowing commit")
+        return 0
+
+
+def _verify_tests(
+    path_or_message: str,
+    cwd: Path,
+    pytest_args: Sequence[str],
+    pytest_output_file: Optional[Path],
+    command: Optional[str],
+    timeout_s: Optional[float],
+) -> int:
     if os.path.isfile(path_or_message):
         message = Path(path_or_message).read_text(encoding="utf-8", errors="replace")
     else:
@@ -35,10 +58,12 @@ def verify_tests(
     if pytest_output_file is not None:
         try:
             captured = Path(pytest_output_file).read_text(encoding="utf-8", errors="replace")
-        except FileNotFoundError:
+        except OSError:
+            # Not just FileNotFoundError: a directory path raises
+            # PermissionError on Windows and IsADirectoryError on Linux.
             print(
                 f"claim-check: WARNING - could not verify (pytest output file "
-                f"{pytest_output_file} not found); allowing commit"
+                f"{pytest_output_file} not readable); allowing commit"
             )
             return 0
         run_result = result_from_captured_output(0, captured)
@@ -84,7 +109,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     verify_parser.add_argument(
         "--timeout",
-        type=float,
+        type=positive_timeout,
         default=DEFAULT_TIMEOUT_S,
         help=f"Kill the test run and fail open after this many seconds (default: {DEFAULT_TIMEOUT_S})",
     )

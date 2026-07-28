@@ -15,12 +15,31 @@ import argparse
 import sys
 from typing import Optional, Sequence
 
+from .._args import positive_timeout
 from ..claims import extract_claims
 from ..compare import compare_claims
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
 
 RESULT_SUCCESS = 0
 RESULT_FAIL = 1
+
+
+def _verify(message: str, args) -> int:
+    claims = extract_claims(message)
+    if not claims:
+        return RESULT_SUCCESS
+
+    run_result = run_pytest(args.cwd, timeout_s=args.timeout, command=args.command)
+    verdict = compare_claims(claims, run_result.counts)
+
+    if verdict.status == "mismatch":
+        print(f"claim-check: {verdict.message}")
+        return RESULT_FAIL
+
+    if verdict.status == "runner_error":
+        print(f"claim-check: WARNING - could not verify ({run_result.parse_error}); allowing commit")
+
+    return RESULT_SUCCESS
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -38,7 +57,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument(
         "--timeout",
-        type=float,
+        type=positive_timeout,
         default=DEFAULT_TIMEOUT_S,
         help=f"Kill the test run and fail open after this many seconds (default: {DEFAULT_TIMEOUT_S})",
     )
@@ -56,21 +75,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("claim-check: commit message file missing or not valid UTF-8; skipping verification")
         return RESULT_SUCCESS
 
-    claims = extract_claims(message)
-    if not claims:
+    try:
+        return _verify(message, args)
+    except Exception as exc:  # noqa: BLE001 - deliberate catch-all backstop
+        # This runs as a commit-msg hook, where any nonzero exit aborts the
+        # commit. No internal defect may ever do that: a crash is not
+        # evidence a claim is wrong. Argument parsing stays outside the
+        # guard on purpose - see _args.positive_timeout.
+        print(f"claim-check: WARNING - could not verify (internal error: {exc!r}); allowing commit")
         return RESULT_SUCCESS
-
-    run_result = run_pytest(args.cwd, timeout_s=args.timeout, command=args.command)
-    verdict = compare_claims(claims, run_result.counts)
-
-    if verdict.status == "mismatch":
-        print(f"claim-check: {verdict.message}")
-        return RESULT_FAIL
-
-    if verdict.status == "runner_error":
-        print(f"claim-check: WARNING - could not verify ({run_result.parse_error}); allowing commit")
-
-    return RESULT_SUCCESS
 
 
 if __name__ == "__main__":
