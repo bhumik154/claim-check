@@ -80,10 +80,49 @@ def _split_into_segments(tokens: list) -> list:
     return [seg for seg in segments if seg]
 
 
+# git's own global options, which may appear between "git" and the
+# subcommand. Only the ones that take a separate value need the two-token
+# skip; the "--flag=value" forms are a single token.
+_GIT_GLOBAL_FLAGS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--exec-path", "--namespace"}
+_GIT_GLOBAL_BOOLEAN_FLAGS = {
+    "--no-pager",
+    "--paginate",
+    "--bare",
+    "--literal-pathspecs",
+    "--no-replace-objects",
+}
+
+
 def _find_git_commit_segment(segments: list):
+    """Returns the token list starting at "commit", or None.
+
+    Skips git's own global options first: requiring "commit" to be
+    literally the second token meant "git -C /repo commit" - the ordinary
+    way to drive git from another directory - went entirely unverified.
+    A leading wrapper ("sudo git commit", "env FOO=1 git commit") is still
+    unsupported and documented as such; this only relaxes git's own flags.
+    """
     for segment in segments:
-        if len(segment) >= 2 and segment[0] == "git" and segment[1] == "commit":
-            return segment
+        if not segment or segment[0] != "git":
+            continue
+
+        i = 1
+        while i < len(segment):
+            token = segment[i]
+            if token in _GIT_GLOBAL_FLAGS_WITH_VALUE:
+                i += 2
+                continue
+            if token in _GIT_GLOBAL_BOOLEAN_FLAGS:
+                i += 1
+                continue
+            if token.startswith("--") and "=" in token and token.split("=", 1)[0] in _GIT_GLOBAL_FLAGS_WITH_VALUE:
+                i += 1
+                continue
+            break
+
+        if i < len(segment) and segment[i] == "commit":
+            return segment[i:]
+
     return None
 
 
@@ -134,14 +173,17 @@ def extract_commit_message(command: str) -> Optional[str]:
 
     resolved = []
     for value in values:
-        if value in heredocs:
+        if any(key in value for key in heredocs):
             if unresolved:
                 # This heredoc's body relies on shell expansion we can't
                 # perform; extracting it verbatim could produce a message
                 # that doesn't match what git will actually receive.
                 return None
-            resolved.append(heredocs[value])
-        else:
-            resolved.append(value)
+            # Substring substitution, not exact-token equality: a heredoc
+            # with text around it ("-m \"prefix $(cat <<'EOF' ...)\"")
+            # otherwise left the internal sentinel in the message.
+            for key, body in heredocs.items():
+                value = value.replace(key, body)
+        resolved.append(value)
 
     return "\n\n".join(resolved)
