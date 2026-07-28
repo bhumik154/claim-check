@@ -240,3 +240,12 @@ def test_broken_fixture_alongside_passing_tests_is_flagged_not_silently_matched(
     )
     code = main(["verify-tests", "Refactored API logic, 22 passed.", "--cwd", str(tmp_path)])
     assert code == 1
+
+
+def test_pytest_output_pointing_at_a_directory_fails_open(tmp_path, capsys):
+    # Only FileNotFoundError was caught; a directory raises PermissionError
+    # on Windows and IsADirectoryError on Linux.
+    from claim_check.cli import verify_tests
+
+    assert verify_tests("22 passed", pytest_output_file=tmp_path) == 0
+    assert "could not verify" in capsys.readouterr().out

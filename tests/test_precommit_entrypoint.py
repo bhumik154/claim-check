@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 from claim_check.entrypoints.precommit import main
 
 
@@ -123,3 +125,30 @@ def test_timeout_flag_kills_a_hanging_command_and_fails_open(tmp_path):
         ]
     )
     assert code == 0
+
+
+def test_an_unexpected_internal_error_allows_the_commit(tmp_path, monkeypatch):
+    # A commit-msg hook exits nonzero to abort the commit, so any unhandled
+    # exception aborts an honest commit with a raw traceback. Confirmed end
+    # to end before this guard existed: a test printing a line shaped like
+    # "deploy finished in 1.2.3s" blocked the commit.
+    from claim_check.entrypoints import precommit
+
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text("22 passed", encoding="utf-8")
+
+    def boom(*a, **kw):
+        raise RuntimeError("synthetic internal failure")
+
+    monkeypatch.setattr(precommit, "run_pytest", boom)
+    assert precommit.main([str(msg)]) == 0
+
+
+def test_non_positive_timeout_is_rejected_loudly(tmp_path):
+    from claim_check.entrypoints import precommit
+
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text("22 passed", encoding="utf-8")
+    with pytest.raises(SystemExit) as excinfo:
+        precommit.main([str(msg), "--timeout", "0"])
+    assert excinfo.value.code == 2

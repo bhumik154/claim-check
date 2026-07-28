@@ -167,3 +167,58 @@ def test_timeout_override_is_forwarded_to_run_pytest(monkeypatch):
     monkeypatch.setattr(claude_hook_module, "run_pytest", fake_run_pytest)
     main(_payload('git commit -m "22 passed"'), argv=["--timeout", "5"])
     assert seen["timeout_s"] == 5.0
+
+
+def test_malformed_tool_input_shapes_all_allow_instead_of_crashing():
+    # The hook did payload.get("tool_input", {}).get("command", "") with no
+    # type guard: tool_input=null raised AttributeError, and a non-string
+    # command raised TypeError inside the shell parser. The module docstring
+    # promises it "fails open at every uncertain step"; it did not.
+    from claim_check.entrypoints import claude_hook
+
+    payloads = [
+        {"tool_name": "Bash", "tool_input": None},
+        {"tool_name": "Bash", "tool_input": "git commit -m '22 passed'"},
+        {"tool_name": "Bash", "tool_input": [1, 2]},
+        {"tool_name": "Bash", "tool_input": {"command": None}},
+        {"tool_name": "Bash", "tool_input": {"command": 42}},
+        {"tool_name": "Bash", "tool_input": {"command": ["git", "commit"]}},
+    ]
+    for payload in payloads:
+        assert claude_hook.main(stdin_text=json.dumps(payload), argv=[]) == 0
+
+
+def test_null_or_missing_cwd_falls_back_instead_of_crashing(tmp_path):
+    # payload.get("cwd", ".") returns None when the key is present and null,
+    # which reached subprocess as the literal directory "None".
+    from claim_check.entrypoints import claude_hook
+
+    payload = {
+        "tool_name": "Bash",
+        "cwd": None,
+        "tool_input": {"command": "git commit -m 'chore: no claim here'"},
+    }
+    assert claude_hook.main(stdin_text=json.dumps(payload), argv=[]) == 0
+
+
+def test_nonexistent_cwd_allows_instead_of_crashing():
+    from claim_check.entrypoints import claude_hook
+
+    payload = {
+        "tool_name": "Bash",
+        "cwd": "Z:/definitely/not/here",
+        "tool_input": {"command": "git commit -m 'chore: no claim here'"},
+    }
+    assert claude_hook.main(stdin_text=json.dumps(payload), argv=[]) == 0
+
+
+def test_an_unexpected_internal_error_still_allows(monkeypatch):
+    # The backstop: no internal defect, present or future, may block.
+    from claim_check.entrypoints import claude_hook
+
+    def boom(*a, **kw):
+        raise RuntimeError("synthetic internal failure")
+
+    monkeypatch.setattr(claude_hook, "extract_commit_message", boom)
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git commit -m '22 passed'"}}
+    assert claude_hook.main(stdin_text=json.dumps(payload), argv=[]) == 0
