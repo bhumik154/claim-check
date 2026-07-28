@@ -1,7 +1,10 @@
+import argparse
 import sys
+from pathlib import Path
 
 import pytest
 
+from claim_check._args import positive_timeout
 from claim_check.runner import result_from_captured_output, run_pytest
 
 
@@ -77,10 +80,6 @@ def test_a_byte_invalid_in_the_locale_encoding_does_not_crash_the_whole_process(
     assert result.counts.passed == 1
 
 
-from claim_check._args import positive_timeout
-import argparse
-
-
 def test_nonexistent_working_directory_fails_open_naming_the_directory(tmp_path):
     # Only FileNotFoundError was caught. Windows raises NotADirectoryError
     # for a bad cwd, so this crashed with an unhandled traceback - and in
@@ -98,7 +97,22 @@ def test_working_directory_that_is_a_file_fails_open(tmp_path):
     target.write_text("x", encoding="utf-8")
     result = run_pytest(target, timeout_s=20)
     assert result.counts is None
-    assert result.parse_error is not None
+    assert "notadir.txt" in result.parse_error
+
+
+def test_working_directory_permission_error_on_stat_fails_open(tmp_path, monkeypatch):
+    # Path.is_dir() only swallows a small ignored-errno set (ENOENT,
+    # ENOTDIR, EBADF, ELOOP, ...); EACCES is not in it, so a PermissionError
+    # from a locked share or an ACL-mismatched mount re-raises straight out
+    # of Path.is_dir(). Simulated with monkeypatch since real permission
+    # failures aren't reliably reproducible on Windows.
+    def _raise_permission_error(self):
+        raise PermissionError("simulated EACCES")
+
+    monkeypatch.setattr(Path, "is_dir", _raise_permission_error)
+    result = run_pytest(tmp_path, timeout_s=20)
+    assert result.counts is None
+    assert "simulated EACCES" in result.parse_error
 
 
 def test_none_working_directory_falls_back_to_the_current_directory(tmp_path):

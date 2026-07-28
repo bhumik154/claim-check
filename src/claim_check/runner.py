@@ -64,12 +64,19 @@ def run_pytest(
     except TypeError:
         return _failed_run(f"invalid working directory: {cwd!r}")
 
-    if not cwd_path.is_dir():
-        # Checked up front so the reason names the directory. Left to
-        # subprocess, this surfaces as FileNotFoundError on Linux (reported
-        # as a missing *command*, blaming the interpreter) and as an
-        # uncaught NotADirectoryError on Windows.
-        return _failed_run(f"working directory not found: {str(cwd_path)!r}")
+    try:
+        is_directory = cwd_path.is_dir()
+        exists = cwd_path.exists()
+    except OSError as exc:
+        # Path.is_dir() re-raises anything outside its small ignored-errno
+        # set - a permission error on a locked share or an ACL-mismatched
+        # mount reaches here as PermissionError. An unhandled raise in this
+        # module aborts the developer's commit.
+        return _failed_run(f"could not inspect the working directory {str(cwd_path)!r}: {exc}")
+
+    if not is_directory:
+        problem = "is not a directory" if exists else "not found"
+        return _failed_run(f"working directory {problem}: {str(cwd_path)!r}")
 
     try:
         proc = subprocess.run(
