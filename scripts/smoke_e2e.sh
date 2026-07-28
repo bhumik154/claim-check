@@ -42,6 +42,9 @@ try "ratio lie spelled 'tests pass'"  BLOCK  "x
 try "negated ratio claim"             ACCEPT "x
 
 not 22/22 passed"
+try "no count claim at all, suite red" ACCEPT "x
+
+Refactor the loop for clarity, no numbers here"
 
 echo "=== forged summary line from a failing test ==="
 cat > tests/test_suite.py <<'PY'
