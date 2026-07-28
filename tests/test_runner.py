@@ -115,6 +115,25 @@ def test_working_directory_permission_error_on_stat_fails_open(tmp_path, monkeyp
     assert "simulated EACCES" in result.parse_error
 
 
+def test_exists_raising_while_is_dir_succeeds_does_not_fail_open(tmp_path, monkeypatch):
+    # exists() used to run unconditionally inside the same guard as is_dir().
+    # If is_dir() succeeds and returns True but a later exists() call raises
+    # (a locked share, an ACL-mismatched mount), a perfectly valid, usable
+    # working directory returned _failed_run and verification was silently
+    # skipped. exists() should only be consulted (and only when it cannot
+    # raise) on the "not a directory" path, never on the success path.
+    _write_passing_test(tmp_path)
+
+    def _raise_permission_error(self):
+        raise PermissionError("simulated EACCES")
+
+    monkeypatch.setattr(Path, "exists", _raise_permission_error)
+    result = run_pytest(tmp_path, timeout_s=20)
+    assert result.counts is not None
+    assert result.counts.passed == 2
+    assert result.parse_error is None
+
+
 def test_none_working_directory_falls_back_to_the_current_directory(tmp_path):
     _write_passing_test(tmp_path)
     result = run_pytest(None, pytest_args=[str(tmp_path)], timeout_s=60)
@@ -154,6 +173,17 @@ def test_positive_timeout_rejects_zero_and_negative_values():
 def test_positive_timeout_rejects_unparseable_values():
     with pytest.raises(argparse.ArgumentTypeError):
         positive_timeout("abc")
+
+
+def test_positive_timeout_rejects_non_finite_values():
+    # value <= 0 is False for nan and inf alike, so these used to slip past
+    # the guard entirely and reach subprocess.run(timeout=...), which raises
+    # ValueError for nan and OverflowError for inf - neither caught anywhere
+    # downstream, so both fell through to the entry point's catch-all and
+    # printed "internal error; allowing commit" on every commit forever.
+    for bad in ("nan", "inf", "-inf", "1e400"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            positive_timeout(bad)
 
 
 def test_captured_output_helper_tolerates_non_string_input():

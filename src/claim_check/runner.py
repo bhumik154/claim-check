@@ -66,7 +66,6 @@ def run_pytest(
 
     try:
         is_directory = cwd_path.is_dir()
-        exists = cwd_path.exists()
     except OSError as exc:
         # Path.is_dir() re-raises anything outside its small ignored-errno
         # set - a permission error on a locked share or an ACL-mismatched
@@ -75,6 +74,15 @@ def run_pytest(
         return _failed_run(f"could not inspect the working directory {str(cwd_path)!r}: {exc}")
 
     if not is_directory:
+        # exists() is only needed here, to distinguish "not found" from "is
+        # a file", and it gets its own guard: a locked share or an
+        # ACL-mismatched mount can make is_dir() succeed (return True) while
+        # a later exists() call still raises, and that must not turn a
+        # perfectly valid, usable working directory into a failed run.
+        try:
+            exists = cwd_path.exists()
+        except OSError:
+            exists = True
         problem = "is not a directory" if exists else "not found"
         return _failed_run(f"working directory {problem}: {str(cwd_path)!r}")
 

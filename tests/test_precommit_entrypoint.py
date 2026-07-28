@@ -144,6 +144,17 @@ def test_an_unexpected_internal_error_allows_the_commit(tmp_path, monkeypatch):
     assert precommit.main([str(msg)]) == 0
 
 
+def test_null_byte_in_input_path_allows_the_commit_instead_of_raising():
+    # open() on a path containing an embedded null byte raises ValueError
+    # ("embedded null byte"), not UnicodeDecodeError or OSError. The
+    # open() call used to sit outside the catch-all backstop, so this
+    # ValueError escaped main() entirely, producing a traceback and a
+    # nonzero exit - aborting the commit, which contradicts this module's
+    # own guarantee that no internal error can ever block one.
+    code = main(["bad\x00path"])
+    assert code == 0
+
+
 def test_non_positive_timeout_is_rejected_loudly(tmp_path):
     from claim_check.entrypoints import precommit
 
