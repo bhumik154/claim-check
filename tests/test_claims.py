@@ -200,3 +200,30 @@ def test_comma_before_a_genuine_claim_still_registers():
     claims = extract_claims("took 3.5s, 22 passed")
     assert len(claims) == 1
     assert claims[0].claimed_passed == 22
+
+
+def test_a_later_weaker_claim_does_not_silence_an_earlier_stronger_one():
+    # Confirmed real: position alone used to decide the winner, so a later
+    # but less specific all_pass claim discarded an earlier, more specific
+    # (and false) n_of_m claim. "50/50 tests pass" is a lie against a real
+    # 3-passed/0-failed run, but "All tests pass now." - true of that same
+    # run - came later in the text and silenced it, letting the commit
+    # through. Specificity must win regardless of position.
+    message = "Fix parser: 50/50 tests pass\n\nAll tests pass now."
+    claims = extract_claims(message)
+    assert len(claims) == 1
+    assert claims[0].kind == "n_of_m"
+    assert claims[0].claimed_passed == 50
+    assert claims[0].claimed_total == 50
+
+
+def test_last_claim_wins_when_two_n_of_m_claims_of_equal_specificity_repeat():
+    # Equal-specificity tie: falls back to last-position-wins, same
+    # principle as the existing n_passed-repeats-twice test, applied to
+    # n_of_m instead.
+    message = "Thought it was 14/15 tests passing earlier, but it's actually 15/15 tests pass"
+    claims = extract_claims(message)
+    assert len(claims) == 1
+    assert claims[0].kind == "n_of_m"
+    assert claims[0].claimed_passed == 15
+    assert claims[0].claimed_total == 15
