@@ -1,0 +1,173 @@
+"""Evidence store: recording real test runs so a claim can be checked
+against what actually happened rather than by re-running the suite.
+
+The two invariants under test throughout: staleness only ever downgrades
+evidence to "unknown" (never promotes a claim to "false"), and uncertain
+scope is always resolved as "scoped" (unusable), never as whole-suite.
+"""
+
+import json
+import time
+
+import pytest
+
+from claim_check import evidence
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    """A source tree plus an isolated cache root, so tests never touch the
+    real user cache."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "test_a.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+    return root
+
+
+PASSING_OUTPUT = (
+    "============================= test session starts =============================\n"
+    "collected 22 items\n\n"
+    "========================= 22 passed in 0.30s =========================\n"
+)
+
+
+def test_evidence_is_stored_outside_the_working_tree(project):
+    # The agent under verification can write anything inside the repo, so
+    # evidence kept there could simply be edited rather than earned.
+    evidence.record_run(project, "s1", "python -m pytest", PASSING_OUTPUT)
+    path = evidence.evidence_path(project, "s1")
+    assert path.is_file()
+    assert project not in path.parents
+    assert str(project) not in str(path)
+
+
+def test_a_real_run_is_recorded_with_its_counts_and_argv(project):
+    record = evidence.record_run(project, "s1", "python -m pytest", PASSING_OUTPUT)
+    assert record["counts"]["passed"] == 22
+    assert record["argv"] == ["python", "-m", "pytest"]
+    assert record["scoped"] is False
+
+
+def test_output_with_no_summary_line_is_not_recorded_as_evidence(project):
+    # An ordinary Bash call that happens to be observed is not a test run.
+    assert evidence.record_run(project, "s1", "ls -la", "total 0\ndrwxr-xr-x\n") is None
+    assert not evidence.evidence_path(project, "s1").exists()
+
+
+def test_fresh_evidence_round_trips(project):
+    evidence.record_run(project, "s1", "python -m pytest", PASSING_OUTPUT)
+    loaded = evidence.load_fresh(project, "s1")
+    assert loaded is not None
+    counts = evidence.counts_from_record(loaded)
+    assert counts.passed == 22
+    assert counts.total == 22
+
+
+def test_evidence_past_its_ttl_reads_as_unknown(project):
+    evidence.record_run(project, "s1", "python -m pytest", PASSING_OUTPUT, ttl_s=60)
+    assert evidence.load_fresh(project, "s1", now=time.time() + 61) is None
+
+
+def test_evidence_recorded_against_a_different_tree_state_reads_as_unknown(project):
+    # The whole point of the fingerprint: a run from before the last edit is
+    # not evidence about the code as it stands now.
+    evidence.record_run(project, "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh(project, "s1") is not None
+    (project / "test_b.py").write_text("def test_b():\n    assert True\n", encoding="utf-8")
+    assert evidence.load_fresh(project, "s1") is None
+
+
+def test_another_sessions_evidence_is_never_read_for_this_session(project):
+    # Two agents in one repo must not silently judge each other's work.
+    evidence.record_run(project, "session-a", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh(project, "session-b") is None
+
+
+def test_missing_corrupt_and_non_dict_records_all_read_as_unknown(project):
+    assert evidence.load_fresh(project, "never-recorded") is None
+
+    path = evidence.evidence_path(project, "s1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    assert evidence.load_fresh(project, "s1") is None
+
+    path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    assert evidence.load_fresh(project, "s1") is None
+
+    path.write_text(json.dumps({"recorded_at": "soon"}), encoding="utf-8")
+    assert evidence.load_fresh(project, "s1") is None
+
+
+def test_recording_never_raises_even_when_the_cache_is_unwritable(project, monkeypatch, tmp_path):
+    # A hook that crashes because a disk is full is worse than one that
+    # silently records nothing.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+    record = evidence.record_run(project, "s1", "python -m pytest", PASSING_OUTPUT)
+    assert record["counts"]["passed"] == 22  # parsed fine, just not persisted
+
+
+def test_fingerprint_of_an_unreachable_tree_is_empty_not_an_exception(tmp_path):
+    assert evidence.fingerprint(tmp_path / "does-not-exist") == ""
+
+
+def test_fingerprint_ignores_churn_that_cannot_change_test_behaviour(project):
+    before = evidence.fingerprint(project)
+    (project / "__pycache__").mkdir()
+    (project / "__pycache__" / "junk.pyc").write_bytes(b"\x00\x01")
+    (project / ".pytest_cache").mkdir()
+    (project / ".pytest_cache" / "v").write_text("x", encoding="utf-8")
+    assert evidence.fingerprint(project) == before
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest",
+        "pytest",
+        "python3 -m pytest -q",
+        "pytest -v --tb=short",
+        "poetry run pytest",
+    ],
+)
+def test_whole_suite_invocations_are_not_marked_scoped(command):
+    import shlex
+
+    assert evidence.is_scoped(shlex.split(command)) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -k slow",                     # the documented -k hazard
+        "pytest -m integration",
+        "pytest tests/unit",                  # a path narrows collection
+        "pytest tests/test_a.py::test_one",   # a node id narrows it further
+        "pytest -x",                          # stops early, total is meaningless
+        "pytest -xvs",                        # -x bundled into a short-flag run
+        "pytest --lf",
+        "pytest --ff",
+        "pytest --maxfail=1",
+        "pytest --deselect tests/test_a.py::test_one",
+        "pytest --collect-only",
+    ],
+)
+def test_scope_narrowing_invocations_are_marked_scoped(command):
+    import shlex
+
+    assert evidence.is_scoped(shlex.split(command)) is True
+
+
+def test_an_unparseable_command_is_treated_as_scoped(project):
+    # Bias: unknown scope must never be usable as whole-suite evidence,
+    # because a wrongly-unscoped record can confirm a false claim, whereas a
+    # wrongly-scoped one merely goes unused.
+    record = evidence.record_run(project, "s1", 'pytest "unbalanced', PASSING_OUTPUT)
+    assert record["scoped"] is True
+
+
+def test_empty_argv_is_treated_as_scoped():
+    assert evidence.is_scoped([]) is True

@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 168 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, all three entry points, and the plugin manifest. One example, from the comparison core:
+[`tests/`](tests/) has 223 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all four entry points, and the plugin manifest. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():

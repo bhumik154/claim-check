@@ -17,11 +17,11 @@ warning (to stderr, not stdout: Claude Code parses stdout as JSON on exit
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Optional, Sequence
 
 from .._args import positive_timeout
 from .._debug import dump_payload
+from .._payload import bash_command, resolve_cwd
 from ..claims import extract_claims
 from ..compare import compare_claims
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
@@ -60,16 +60,6 @@ def _parse_args(argv: Optional[Sequence[str]]):
     return parser.parse_args(argv if argv is not None else sys.argv[1:])
 
 
-def _resolve_cwd(payload: dict) -> str:
-    """payload.get("cwd", ".") returns None when the key is present and
-    explicitly null, which reached subprocess as the literal directory
-    "None"."""
-    cwd = payload.get("cwd")
-    if isinstance(cwd, str) and Path(cwd).is_dir():
-        return cwd
-    return "."
-
-
 def _run(stdin_text: Optional[str], args) -> int:
     if stdin_text is None and sys.stdin.isatty():
         # Claude Code always pipes the hook JSON in (confirmed: a piped
@@ -87,18 +77,15 @@ def _run(stdin_text: Optional[str], args) -> int:
     except (json.JSONDecodeError, TypeError):
         return 0
 
-    if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+    if not isinstance(payload, dict):
         return 0
 
-    # Every field below is type-guarded rather than trusted. Claude Code
-    # sends a well-formed payload today, but an unhandled AttributeError or
+    # Payload fields are type-guarded rather than trusted, in _payload.py so
+    # all three hooks share one implementation of the guards. Claude Code
+    # sends well-formed payloads today, but an unhandled AttributeError or
     # TypeError here contradicts this module's whole contract.
-    tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
-        return 0
-
-    command = tool_input.get("command")
-    if not isinstance(command, str):
+    command = bash_command(payload)
+    if command is None:
         return 0
 
     message = extract_commit_message(command)
@@ -109,7 +96,7 @@ def _run(stdin_text: Optional[str], args) -> int:
     if not claims:
         return 0
 
-    run_result = run_pytest(_resolve_cwd(payload), timeout_s=args.timeout, command=args.command)
+    run_result = run_pytest(resolve_cwd(payload), timeout_s=args.timeout, command=args.command)
     verdict = compare_claims(claims, run_result.counts)
 
     if verdict.status == "mismatch":
