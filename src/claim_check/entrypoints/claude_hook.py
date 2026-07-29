@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .._args import positive_timeout
+from .._debug import dump_payload
 from ..claims import extract_claims
 from ..compare import compare_claims
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
@@ -79,6 +80,7 @@ def _run(stdin_text: Optional[str], args) -> int:
         return 0
 
     raw = stdin_text if stdin_text is not None else sys.stdin.read()
+    dump_payload("PreToolUse", raw)
 
     try:
         payload = json.loads(raw)
