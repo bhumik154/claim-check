@@ -8,10 +8,23 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Windows is not optional here. This project has already shipped two
+    # Windows-only defects that an ubuntu-only matrix could not have caught:
+    # a cp1252 decoding crash, and a bad --cwd raising NotADirectoryError
+    # where Linux raises FileNotFoundError.
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.9"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,3 +36,47 @@ jobs:
       - run: claim-check verify-tests --help
       - run: claim-check-precommit --help
       - run: claim-check-claude-hook --help
+
+  plugin-bundled:
+    # Deliberately does NOT `pip install` the package. The Claude Code plugin
+    # runs from bundled source via PYTHONPATH, so that path needs its own
+    # coverage: a packaging change can break it while every installed-mode
+    # test still passes.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Launcher runs from bundled source and exits 0
+        shell: bash
+        run: |
+          echo '{"tool_name":"Bash","cwd":".","tool_input":{"command":"git commit -m \"chore: no claim here\""}}' \
+            | bash hooks/run-hook.cmd claude_hook
+
+      - name: Launcher exits 0 and stays silent when no interpreter is usable
+        shell: bash
+        run: |
+          set +e
+          out=$(env PATH=/usr/bin:/bin CLAIM_CHECK_PYTHON=/no/such/python \
+            bash hooks/run-hook.cmd claude_hook < /dev/null)
+          rc=$?
+          set -e
+          test "$rc" -eq 0 || { echo "launcher exited $rc, must be 0"; exit 1; }
+          test -z "$out" || { echo "launcher wrote output: $out"; exit 1; }
+
+      - name: Launcher exits 0 with no argument
+        shell: bash
+        run: bash hooks/run-hook.cmd < /dev/null
+
+      - name: Launcher runs under cmd.exe too
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo {"tool_name":"Write","tool_input":{}} | hooks\run-hook.cmd claude_hook
+          if errorlevel 1 exit /b 1

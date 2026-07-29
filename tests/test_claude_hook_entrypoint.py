@@ -222,3 +222,39 @@ def test_an_unexpected_internal_error_still_allows(monkeypatch):
     monkeypatch.setattr(claude_hook, "extract_commit_message", boom)
     payload = {"tool_name": "Bash", "tool_input": {"command": "git commit -m '22 passed'"}}
     assert claude_hook.main(stdin_text=json.dumps(payload), argv=[]) == 0
+
+
+def test_debug_dump_writes_the_raw_payload_when_the_env_var_is_set(tmp_path, monkeypatch):
+    # The plugin docs contradict themselves on payload field names, so being
+    # able to capture what a hook actually received is the only reliable way
+    # to settle it on a given Claude Code version.
+    from claim_check.entrypoints import claude_hook
+
+    monkeypatch.setenv("CLAIM_CHECK_DEBUG_DUMP", str(tmp_path / "dumps"))
+    raw = json.dumps({"tool_name": "Write", "tool_input": {}})
+    assert claude_hook.main(stdin_text=raw, argv=[]) == 0
+
+    written = list((tmp_path / "dumps").glob("PreToolUse-*.json"))
+    assert len(written) == 1
+    assert json.loads(written[0].read_text(encoding="utf-8"))["tool_name"] == "Write"
+
+
+def test_debug_dump_is_a_silent_no_op_when_the_env_var_is_unset(tmp_path, monkeypatch):
+    from claim_check.entrypoints import claude_hook
+
+    monkeypatch.delenv("CLAIM_CHECK_DEBUG_DUMP", raising=False)
+    raw = json.dumps({"tool_name": "Write", "tool_input": {}})
+    assert claude_hook.main(stdin_text=raw, argv=[]) == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unwritable_debug_dump_target_never_breaks_the_hook(tmp_path, monkeypatch):
+    # A debugging aid that can break the hook it instruments is worse than
+    # none: this runs in a PreToolUse hook where a raise is a nonzero exit.
+    from claim_check.entrypoints import claude_hook
+
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("CLAIM_CHECK_DEBUG_DUMP", str(blocker / "nested"))
+    raw = json.dumps({"tool_name": "Write", "tool_input": {}})
+    assert claude_hook.main(stdin_text=raw, argv=[]) == 0

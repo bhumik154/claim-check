@@ -1,0 +1,120 @@
+# claim-check as a Claude Code plugin
+
+Installs claim-check as a `PreToolUse` hook, so a `git commit` issued through
+the Bash tool is checked before it runs: if the commit message states a test
+count and that count is wrong, the tool call is denied with the real numbers.
+
+**If the message makes no test-count claim, nothing happens.** That rule is
+non-negotiable and is what makes this safe to leave switched on.
+
+## Install
+
+```bash
+claude plugin marketplace add bhumik154/claim-check
+claude plugin install claim-check@claim-check
+```
+
+Then **restart `claude`**. See the next section — this is not optional.
+
+### No `pip install` required
+
+The plugin bundles its own source and runs it with whatever Python it can
+find, because claim-check has zero runtime dependencies. The launcher looks
+for an interpreter in this order, requiring 3.9+:
+
+1. `$CLAIM_CHECK_PYTHON` (set this to pin a specific interpreter)
+2. `py -3` (Windows)
+3. `python3`, then `python`
+
+If no usable interpreter is found, the hook exits silently and every tool call
+proceeds untouched. A missing Python is never a reason to block your work.
+
+## Hooks load only at session start
+
+A newly installed or updated plugin is **silently inert** until you restart
+`claude`. There is no error and no warning; the hook simply never fires.
+
+To confirm it is actually loaded, make a commit with a deliberately wrong
+count in a repo with a test suite and check that it gets denied:
+
+```bash
+git commit -m "9999 passed"
+```
+
+## What it checks
+
+The commit message is scanned for a test-count claim — `"22 passed"`,
+`"15/17 passing"`, `"all tests pass"`, `"all 22 tests pass"` — and if one is
+found, pytest is run and the claim compared against its summary line.
+
+| Situation | Result |
+|---|---|
+| No claim in the message | Allowed, always |
+| Claim matches the real run | Allowed |
+| Claim contradicts the real run | **Denied**, with the actual numbers |
+| pytest crashed, timed out, or could not be run | Allowed, with a warning |
+| The command is not a `git commit` | Allowed |
+
+Everything uncertain resolves to "allowed". A parse failure is not evidence a
+claim is wrong; it is evidence the claim could not be checked.
+
+## Configuration
+
+The hook reads no config file. To change its behaviour, edit the `command`
+in `hooks/hooks.json` and append flags:
+
+```
+"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" claude_hook --command "poetry run pytest" --timeout 60
+```
+
+- `--command` — override the test runner. Needed when your project's
+  dependencies live in an environment that is not the one the hook's Python
+  can see (poetry, hatch, pipenv, a container). Without it, the hook may find
+  no pytest at all and silently verify nothing.
+- `--timeout` — seconds before the run is killed and the commit allowed
+  through (default 120). Must be greater than zero; `0` and negative values
+  are rejected, because a non-positive timeout kills every run instantly and
+  silently verifies nothing forever.
+
+If you change the timeout, keep the `timeout` field in `hooks.json` above it.
+A hook killed at its own timeout produces no result at all.
+
+## Verifying your setup
+
+Run this from the same shell you use for `git commit`:
+
+```bash
+claim-check verify-tests "22 passed"
+```
+
+If it prints `WARNING - could not verify` with a reason naming a missing
+module or command, the hook will have the same problem, and `--command` is
+the fix.
+
+## Known limits
+
+These are real and documented rather than hidden. The
+[README](README.md#what-this-is-not) covers all of them, but the two that
+matter most for the plugin:
+
+- **It only sees commits issued through the Bash tool.** A commit made
+  through a different tool, or by you in a terminal outside Claude Code, is
+  not checked by this hook. Pair it with the `pre-commit` integration for
+  that.
+- **It cannot know what "the full suite" means to you.** It compares your
+  claim against whatever pytest collects for its own invocation, in its own
+  directory. If your claim is about a broader scope than the hook's run, it
+  will report a mismatch on an honest claim. Read the warning at the top of
+  the README's Usage section before installing.
+
+## Troubleshooting
+
+**Nothing happens on a wrong count.** Restart `claude`. Hooks load only at
+session start. If it still does nothing, check that a test-count claim is
+actually present in the message — no claim means no check, by design.
+
+**Every commit prints "could not verify".** The hook's Python cannot find
+pytest, or cannot find your project's test dependencies. Use `--command`.
+
+**Debugging the raw payload.** Set `CLAIM_CHECK_DEBUG_DUMP` to a directory to
+write each hook payload there as it arrives.
