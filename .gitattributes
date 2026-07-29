@@ -1,0 +1,7 @@
+# The polyglot launcher must keep LF endings. It is executed by Bash on Unix
+# (and potentially by Bash on Windows, depending on how Claude Code invokes
+# hook commands), and Bash treats a trailing CR as part of the command,
+# breaking every line. cmd.exe reads LF-only batch files correctly, so LF is
+# the only ending that works for both halves of the polyglot.
+hooks/run-hook.cmd text eol=lf
+*.sh text eol=lf
