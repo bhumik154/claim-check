@@ -58,6 +58,39 @@ found, pytest is run and the claim compared against its summary line.
 Everything uncertain resolves to "allowed". A parse failure is not evidence a
 claim is wrong; it is evidence the claim could not be checked.
 
+## What it records
+
+The plugin also installs a `PostToolUse` hook that watches for pytest runs you
+make through the Bash tool and records their results.
+
+**It emits nothing, blocks nothing, and changes no behaviour.** It exists so a
+future check can compare a claim against a run that actually happened, instead
+of paying for a second full suite run to find out.
+
+Recorded per run: the counts from the summary line, the exact command, the
+working directory, the session id, and a cheap fingerprint of the source tree
+(file paths, sizes and mtimes — never contents).
+
+Two things about how that evidence is treated:
+
+- **Staleness only ever downgrades evidence to "unknown".** If the tree
+  changed, the record aged out, or the file is unreadable, the answer is "no
+  usable evidence" — never "the claim is false". A bug in the cache can cost
+  you a missed catch; it cannot produce a false accusation.
+- **Scope-narrowing runs are marked unusable for whole-suite claims.** A run
+  with `-k`, `-m`, `-x`, `--lf`, or an explicit path reports a true tally for a
+  *subset*. Treating that as whole-suite evidence would let `pytest -k thing`
+  confirm "all tests pass" while the real suite is red, which is worse than
+  not checking at all.
+
+Evidence lives outside your repository, under `%LOCALAPPDATA%\claim-check\`
+(Windows) or `~/.cache/claim-check/` (Unix), keyed by project path and session.
+Keeping it out of the working tree is deliberate: inside the repo it would be a
+file the agent under verification could simply edit.
+
+Delete that directory at any time; it is a cache, and losing it only means the
+next claim goes unverified rather than wrongly flagged.
+
 ## Configuration
 
 The hook reads no config file. To change its behaviour, edit the `command`

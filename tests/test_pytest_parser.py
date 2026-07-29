@@ -274,3 +274,77 @@ def test_forged_summary_before_forged_header_is_a_documented_limitation_not_a_re
     assert counts.passed == 1020
     assert counts.failed == 1
     assert counts.total == 1021
+
+
+# --- pytest -q emits an undecorated summary line -----------------------------
+# Measured directly: "pytest -q" prints "2 passed in 0.01s" with no "=" padding
+# and no session header at all. The observer receives whatever the agent
+# actually ran, and -q is the most common way to run a suite, so refusing the
+# undecorated form made the PostToolUse observer record nothing at all.
+
+def test_quiet_mode_all_passed_is_parsed():
+    output = "..                                                     [100%]\n2 passed in 0.01s\n"
+    counts = parse_summary_line(output)
+    assert counts is not None
+    assert counts.passed == 2
+    assert counts.total == 2
+
+
+def test_quiet_mode_with_a_failure_is_parsed():
+    output = "FAILED test_bad.py::test_c - assert False\n1 failed, 2 passed in 0.08s\n"
+    counts = parse_summary_line(output)
+    assert counts.failed == 1
+    assert counts.passed == 2
+    assert counts.total == 3
+
+
+def test_quiet_mode_no_tests_ran_is_parsed():
+    counts = parse_summary_line("\nno tests ran in 0.00s\n")
+    assert counts is not None
+    assert counts.total == 0
+
+
+def test_quiet_mode_collection_error_is_parsed():
+    output = "!!!!!! Interrupted: 1 error during collection !!!!!!\n1 error in 0.12s\n"
+    counts = parse_summary_line(output)
+    assert counts.errors == 1
+    assert counts.total == 0
+
+
+def test_an_undecorated_summary_is_only_trusted_as_the_final_line():
+    # The "=" padding is what makes a decorated summary self-identifying.
+    # An undecorated one is a much commoner shape in arbitrary text, so it is
+    # accepted only where real -q output puts it: last. A stray log line in
+    # the middle of a stream is not a tally.
+    output = "3 passed in 1.0s\nsome later unrelated output\n"
+    assert parse_summary_line(output) is None
+
+
+def test_an_undecorated_line_printed_by_a_test_cannot_outrank_the_real_one():
+    # The -q analogue of the forged-summary case: a failing test's captured
+    # stdout is replayed before the run's own summary, so it can never be the
+    # final line.
+    output = (
+        "F                                                     [100%]\n"
+        "=================================== FAILURES ==================================\n"
+        "999 passed in 0.01s\n"
+        "1 failed in 0.05s\n"
+    )
+    counts = parse_summary_line(output)
+    assert counts.failed == 1
+    assert counts.passed == 0
+
+
+def test_prose_that_merely_mentions_a_count_is_not_an_undecorated_summary():
+    assert parse_summary_line("I think 22 passed in the last run\n") is None
+    assert parse_summary_line("Done: everything passed in record time\n") is None
+
+
+def test_a_decorated_summary_still_wins_over_a_trailing_undecorated_line():
+    output = (
+        "============================= test session starts ============================\n"
+        "========================= 7 passed in 1.00s ========================\n"
+        "2 passed in 0.01s\n"
+    )
+    counts = parse_summary_line(output)
+    assert counts.passed == 7
