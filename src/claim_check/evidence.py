@@ -110,6 +110,8 @@ _VALUE_TAKING_FLAGS = frozenset(
     }
 )
 
+_SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", "|&"})
+
 _RUNNER_TOKENS = frozenset({"python", "python3", "py", "-m", "pytest", "py.test", "poetry", "hatch", "run", "uv", "pipenv", "exec"})
 
 
@@ -181,6 +183,36 @@ def fingerprint(project_dir) -> str:
     return digest.hexdigest()
 
 
+def _pytest_segments(tokens: Sequence[str]) -> list:
+    """Splits a shell command into segments and returns those running pytest.
+
+    The Bash tool hands over a whole shell line, not a bare invocation -
+    measured against a live session, an ordinary run arrives as
+    `cd /repo && python -m pytest -q 2>&1 | tail -1`. Analysing that as one
+    flat argv reads "cd" as a path argument and marks every real run scoped,
+    which silently makes the entire evidence store unusable.
+    """
+    segments = [[]]
+    for token in tokens:
+        if (
+            token in _SHELL_OPERATORS
+            or token.startswith(">")
+            or token.startswith("<")
+            or token.startswith("2>")
+            or token.startswith("1>")
+            or token.startswith("&>")
+        ):
+            segments.append([])
+        else:
+            segments[-1].append(token)
+
+    return [
+        segment
+        for segment in segments
+        if any(token == "pytest" or token.endswith("pytest") or token.endswith("py.test") for token in segment)
+    ]
+
+
 def is_scoped(argv: Sequence[str]) -> bool:
     """True if this invocation ran less than the whole suite.
 
@@ -191,7 +223,17 @@ def is_scoped(argv: Sequence[str]) -> bool:
     if not argv:
         return True
 
-    tokens = list(argv)
+    pytest_segments = _pytest_segments(argv)
+    if not pytest_segments:
+        # No recognisable pytest invocation. It may well have run the whole
+        # suite ("make test"), but nothing here can establish that, and
+        # unknown scope is never usable as whole-suite evidence.
+        return True
+
+    return any(_segment_is_scoped(segment) for segment in pytest_segments)
+
+
+def _segment_is_scoped(tokens: list) -> bool:
 
     # "-m" is ambiguous: for `python -m pytest` it is the interpreter's module
     # flag, but for `pytest -m integration` it is a marker filter that narrows
