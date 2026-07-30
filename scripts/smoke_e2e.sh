@@ -9,10 +9,36 @@ export PYTHONDONTWRITEBYTECODE=1
 git init -q .; git config user.email s@t.local; git config user.name Smoke
 printf '__pycache__/\n' > .gitignore
 mkdir -p tests
-cat > .git/hooks/commit-msg <<'HOOK'
+
+# Prefer the installed console script, since that is what a real pre-commit
+# user runs, but fall back to the module. The console-script shim is a small
+# generated .exe on Windows, and an OS application-control policy can refuse
+# to execute it - observed directly on the development machine, where it
+# returned exit 126 and every hook invocation failed, which git reads as
+# "block this commit". That made every scenario here report BLOCK, including
+# the ones asserting a commit is allowed. Falling back keeps this script
+# measuring claim-check's behaviour rather than the machine's exec policy.
+#
+# The Claude Code plugin is immune to this by construction: it invokes
+# `python -m claim_check.entrypoints...` from bundled source and never goes
+# through a console-script shim at all.
+if claim-check-precommit --help >/dev/null 2>&1; then
+  cat > .git/hooks/commit-msg <<'HOOK'
 #!/usr/bin/env bash
 exec claim-check-precommit "$1"
 HOOK
+else
+  echo "note: console script unusable here; falling back to python -m" >&2
+  # Quoted deliberately: the interpreter path routinely contains spaces on
+  # Windows ("C:\Users\First Last\..."), and an unquoted expansion here makes
+  # the hook exec a truncated path, fail, and read as "block every commit" -
+  # which silently turns every ACCEPT scenario below into a false failure.
+  PY="$(command -v python || command -v python3)"
+  cat > .git/hooks/commit-msg <<HOOK
+#!/usr/bin/env bash
+exec "$PY" -m claim_check.entrypoints.precommit "\$1"
+HOOK
+fi
 chmod +x .git/hooks/commit-msg
 git add -A >/dev/null; git commit -q -m "chore: init" >/dev/null 2>&1
 
