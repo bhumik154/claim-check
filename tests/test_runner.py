@@ -1,8 +1,11 @@
+import argparse
 import sys
+from pathlib import Path
 
 import pytest
 
-from claim_check.runner import run_pytest
+from claim_check._args import positive_timeout
+from claim_check.runner import result_from_captured_output, run_pytest
 
 
 def _write_passing_test(tmp_path):
@@ -75,3 +78,114 @@ def test_a_byte_invalid_in_the_locale_encoding_does_not_crash_the_whole_process(
     assert result.returncode == 0
     assert result.counts is not None
     assert result.counts.passed == 1
+
+
+def test_nonexistent_working_directory_fails_open_naming_the_directory(tmp_path):
+    # Only FileNotFoundError was caught. Windows raises NotADirectoryError
+    # for a bad cwd, so this crashed with an unhandled traceback - and in
+    # the commit-msg hook a traceback means a nonzero exit, which aborts an
+    # entirely honest commit. On Linux it was caught but blamed the wrong
+    # thing: "could not find or run the test command: '<python>'".
+    missing = tmp_path / "no-such-dir"
+    result = run_pytest(missing, timeout_s=20)
+    assert result.counts is None
+    assert "no-such-dir" in result.parse_error
+
+
+def test_working_directory_that_is_a_file_fails_open(tmp_path):
+    target = tmp_path / "notadir.txt"
+    target.write_text("x", encoding="utf-8")
+    result = run_pytest(target, timeout_s=20)
+    assert result.counts is None
+    assert "notadir.txt" in result.parse_error
+
+
+def test_working_directory_permission_error_on_stat_fails_open(tmp_path, monkeypatch):
+    # Path.is_dir() only swallows a small ignored-errno set (ENOENT,
+    # ENOTDIR, EBADF, ELOOP, ...); EACCES is not in it, so a PermissionError
+    # from a locked share or an ACL-mismatched mount re-raises straight out
+    # of Path.is_dir(). Simulated with monkeypatch since real permission
+    # failures aren't reliably reproducible on Windows.
+    def _raise_permission_error(self):
+        raise PermissionError("simulated EACCES")
+
+    monkeypatch.setattr(Path, "is_dir", _raise_permission_error)
+    result = run_pytest(tmp_path, timeout_s=20)
+    assert result.counts is None
+    assert "simulated EACCES" in result.parse_error
+
+
+def test_exists_raising_while_is_dir_succeeds_does_not_fail_open(tmp_path, monkeypatch):
+    # exists() used to run unconditionally inside the same guard as is_dir().
+    # If is_dir() succeeds and returns True but a later exists() call raises
+    # (a locked share, an ACL-mismatched mount), a perfectly valid, usable
+    # working directory returned _failed_run and verification was silently
+    # skipped. exists() should only be consulted (and only when it cannot
+    # raise) on the "not a directory" path, never on the success path.
+    _write_passing_test(tmp_path)
+
+    def _raise_permission_error(self):
+        raise PermissionError("simulated EACCES")
+
+    monkeypatch.setattr(Path, "exists", _raise_permission_error)
+    result = run_pytest(tmp_path, timeout_s=20)
+    assert result.counts is not None
+    assert result.counts.passed == 2
+    assert result.parse_error is None
+
+
+def test_none_working_directory_falls_back_to_the_current_directory(tmp_path):
+    _write_passing_test(tmp_path)
+    result = run_pytest(None, pytest_args=[str(tmp_path)], timeout_s=60)
+    assert result.counts is not None
+    assert result.counts.passed == 2
+
+
+def test_unbalanced_quote_in_command_fails_open_instead_of_crashing(tmp_path):
+    # shlex.split sat outside the try block, so a plain quoting typo in
+    # --command raised ValueError: No closing quotation and blocked the
+    # commit. The README itself tells people to quote this flag.
+    result = run_pytest(tmp_path, command='poetry "run pytest', timeout_s=20)
+    assert result.counts is None
+    assert "run pytest" in result.parse_error or "quot" in result.parse_error.lower()
+
+
+def test_whitespace_only_command_fails_open_instead_of_crashing(tmp_path):
+    # shlex.split("   ") returns [], and subprocess.run([]) raised
+    # OSError [WinError 87]; base_command[0] in the error handler would
+    # have raised IndexError on top of it.
+    result = run_pytest(tmp_path, command="   ", timeout_s=20)
+    assert result.counts is None
+    assert result.parse_error is not None
+
+
+def test_positive_timeout_rejects_zero_and_negative_values():
+    # --timeout 0 silently killed every run instantly and failed open,
+    # reporting "did not finish within 0s" - a tool that verifies nothing
+    # while looking like it works is the worst possible outcome here, so
+    # this is a deliberate exception to the fail-open rule.
+    assert positive_timeout("30") == 30.0
+    for bad in ("0", "-5"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            positive_timeout(bad)
+
+
+def test_positive_timeout_rejects_unparseable_values():
+    with pytest.raises(argparse.ArgumentTypeError):
+        positive_timeout("abc")
+
+
+def test_positive_timeout_rejects_non_finite_values():
+    # value <= 0 is False for nan and inf alike, so these used to slip past
+    # the guard entirely and reach subprocess.run(timeout=...), which raises
+    # ValueError for nan and OverflowError for inf - neither caught anywhere
+    # downstream, so both fell through to the entry point's catch-all and
+    # printed "internal error; allowing commit" on every commit forever.
+    for bad in ("nan", "inf", "-inf", "1e400"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            positive_timeout(bad)
+
+
+def test_captured_output_helper_tolerates_non_string_input():
+    assert result_from_captured_output(0, None).counts is None
+    assert result_from_captured_output(0, b"==== 1 passed in 1.0s ====").counts.passed == 1

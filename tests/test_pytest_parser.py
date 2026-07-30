@@ -124,3 +124,153 @@ def test_returns_none_when_pytest_crashes_before_any_summary():
 
 def test_returns_none_for_completely_unrelated_text():
     assert parse_summary_line("this is not pytest output at all") is None
+
+
+def test_a_summary_line_printed_by_a_test_cannot_forge_the_count():
+    # Confirmed spoof, reproduced end to end: a failing test that prints
+    # "==== 1 passed in 0.01s ====" gets that line echoed back by pytest's
+    # own failure report (captured stdout is replayed there), and the old
+    # parser aggregated it with the real summary - turning a true 21-passed
+    # result into 22 and verifying a false "22 passed" claim as correct.
+    # A test's output is always replayed BEFORE its session's real summary
+    # line, so taking the last summary line per session defeats this.
+    counts = parse_summary_line(_read("forged_summary_in_failure_report.txt"))
+    assert counts is not None
+    assert counts.passed == 21
+    assert counts.failed == 1
+    assert counts.total == 22
+
+
+def test_a_version_shaped_duration_does_not_crash_the_parser():
+    # The duration pattern was "[\\d.]+", which accepts "1.2.3" and then
+    # raised ValueError inside float(). Reachable in ordinary use: pytest
+    # replays a failing test's captured stdout, so a test printing a deploy
+    # or build log line was enough to abort the commit with a traceback.
+    output = (
+        "============================= test session starts =============================\n"
+        "==================== deploy finished in 1.2.3s ====================\n"
+        "========================= 1 passed in 0.10s ========================\n"
+    )
+    counts = parse_summary_line(output)
+    assert counts is not None
+    assert counts.passed == 1
+    assert counts.duration_s == 0.10
+
+
+def test_a_version_shaped_duration_alone_is_not_a_summary_line():
+    assert parse_summary_line("==== deploy finished in 1.2.3s ====") is None
+
+
+def test_a_very_long_separator_line_parses_in_linear_time():
+    # The old regex ("^=+\\s*(?P<body>.*?)\\s+in\\s+...") backtracked
+    # quadratically when "=+" and ".*?" competed for the same characters:
+    # 40k "=" took ~5s, and a test printing "=" * 60000 made the commit-msg
+    # hook take 12 seconds. --timeout guards the subprocess, not parsing.
+    import time
+
+    payload = "=" * 200000
+    started = time.perf_counter()
+    assert parse_summary_line(payload) is None
+    assert time.perf_counter() - started < 1.0
+
+
+def test_a_long_near_miss_body_reaches_the_regex_and_still_parses_in_linear_time():
+    # The test above proves nothing about _SUMMARY_BODY_RE: "=" * 200000
+    # strips down to an empty `core` in _classify_line, so the line returns
+    # None from the "if not core" fast path before the regex ever runs. That
+    # only demonstrates the strip is fast, not that the regex is linear.
+    #
+    # This payload starts with "=" but leaves a large, non-empty `core`
+    # after .strip("=").strip(), so _SUMMARY_BODY_RE genuinely runs against
+    # it. Many repeated " in 1 " substrings are the adversarial shape for
+    # "^(?P<body>.*?)\\s+in\\s+\\d+(?:\\.\\d+)?s$": ".*?" must try matching
+    # up through each "in 1" occurrence and fail the trailing "s$" check
+    # (there's no "s" after each "1"), backtracking further each time under
+    # a quadratic implementation.
+    import time
+
+    payload = "= " + ("in 1 " * 40000)
+    core = payload.strip().strip("=").strip()
+    assert core  # confirms this payload actually reaches _SUMMARY_BODY_RE
+
+    started = time.perf_counter()
+    assert parse_summary_line(payload) is None
+    assert time.perf_counter() - started < 1.0
+
+
+def test_summary_lines_within_one_session_take_the_last_not_the_sum():
+    output = (
+        "============================= test session starts =============================\n"
+        "==== 5 passed in 1.00s ====\n"
+        "==== 7 passed in 2.00s ====\n"
+    )
+    counts = parse_summary_line(output)
+    assert counts.passed == 7
+    assert counts.duration_s == 2.00
+
+
+def test_output_with_no_session_header_is_treated_as_a_single_segment():
+    # Guards the real_xdist_output.txt fixture, captured mid-stream with no
+    # header, and any trimmed CI log fed through --pytest-output.
+    counts = parse_summary_line("========== 18 passed, 4 deselected in 0.10s ==========")
+    assert counts.passed == 18
+    assert counts.deselected == 4
+
+
+def test_non_string_input_returns_none_instead_of_raising():
+    assert parse_summary_line(None) is None
+    assert parse_summary_line(12345) is None
+
+
+def test_forged_header_before_forged_summary_is_safe_real_count_wins():
+    # Ordering matters for the segmentation defense: a forged session header
+    # printed BEFORE a forged summary line closes out the segment that the
+    # forged line lives in, so the forged line is stranded mid-segment (not
+    # last) and the real trailing summary line wins. Confirmed directly:
+    # this ordering returns the real 21 passed, not the forged 999.
+    output = (
+        "============================= test session starts =============================\n"
+        "=================================== FAILURES ==================================\n"
+        "----------------------------- Captured stdout call ----------------------------\n"
+        "============================= test session starts =============================\n"
+        "==== 999 passed in 1.0s ====\n"
+        "========================= 1 failed, 21 passed in 0.09s ========================\n"
+    )
+    counts = parse_summary_line(output)
+    assert counts is not None
+    assert counts.passed == 21
+    assert counts.failed == 1
+    assert counts.total == 22
+
+
+def test_forged_summary_before_forged_header_is_a_documented_limitation_not_a_regression():
+    # KNOWN, ACCEPTED, DOCUMENTED limitation of the segmentation design -
+    # this is characterizing existing behavior, NOT asserting it is
+    # desirable. Do NOT "fix" this by changing pytest_parser.py to make
+    # this test pass differently; if you harden the parser against this
+    # case, UPDATE this test's expected values and the limitation note in
+    # the README together, since that's the whole point of pinning it here.
+    #
+    # A Task 2 reviewer hand-traced this ordering and concluded it was safe.
+    # That conclusion was wrong, confirmed directly: when a forged summary
+    # line is printed BEFORE a forged session header (rather than after),
+    # the forged header closes the segment right after the forged line,
+    # making the forged line that segment's LAST line - so it is believed
+    # instead of the real summary that follows in the next segment. The
+    # threat model this parser defends against is accidental miscounting
+    # and casual copy-paste forgery; anyone who can make a test print
+    # arbitrary text to fake this exact ordering can already edit the test
+    # suite directly, so this gap is accepted rather than closed.
+    output = (
+        "============================= test session starts =============================\n"
+        "=================================== FAILURES ==================================\n"
+        "----------------------------- Captured stdout call ----------------------------\n"
+        "==== 999 passed in 1.0s ====\n"
+        "============================= test session starts =============================\n"
+        "========================= 1 failed, 21 passed in 0.09s ========================\n"
+    )
+    counts = parse_summary_line(output)
+    assert counts is not None
+    assert counts.passed == 1020
+    assert counts.failed == 1
+    assert counts.total == 1021

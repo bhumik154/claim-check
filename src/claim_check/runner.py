@@ -23,6 +23,10 @@ from .pytest_parser import parse_summary_line
 DEFAULT_TIMEOUT_S = 120.0
 
 
+def _failed_run(reason: str) -> RunResult:
+    return RunResult(returncode=-1, stdout="", stderr="", counts=None, parse_error=reason)
+
+
 def run_pytest(
     cwd: Union[str, Path],
     pytest_args: Sequence[str] = (),
@@ -39,13 +43,53 @@ def run_pytest(
     live in a different poetry/hatch/pipenv-managed environment - silently
     failing open on every commit, exactly as if no verification tool were
     installed at all).
+
+    Every failure path returns a RunResult with counts=None rather than
+    raising: this runs inside a commit-msg hook, where an unhandled
+    exception means a nonzero exit, which aborts the commit. A
+    misconfiguration is not evidence any claim is wrong.
     """
-    base_command = shlex.split(command) if command else [sys.executable, "-m", "pytest"]
+    try:
+        base_command = shlex.split(command) if command else [sys.executable, "-m", "pytest"]
+    except ValueError as exc:
+        # An unbalanced quote in --command. The README tells people to quote
+        # this flag, so a typo here is an ordinary user mistake, not a bug.
+        return _failed_run(f"could not parse the test command {command!r}: {exc}")
+
+    if not base_command:
+        return _failed_run(f"the test command {command!r} is empty")
+
+    try:
+        cwd_path = Path(cwd) if cwd is not None else Path(".")
+    except TypeError:
+        return _failed_run(f"invalid working directory: {cwd!r}")
+
+    try:
+        is_directory = cwd_path.is_dir()
+    except OSError as exc:
+        # Path.is_dir() re-raises anything outside its small ignored-errno
+        # set - a permission error on a locked share or an ACL-mismatched
+        # mount reaches here as PermissionError. An unhandled raise in this
+        # module aborts the developer's commit.
+        return _failed_run(f"could not inspect the working directory {str(cwd_path)!r}: {exc}")
+
+    if not is_directory:
+        # exists() is only needed here, to distinguish "not found" from "is
+        # a file", and it gets its own guard: a locked share or an
+        # ACL-mismatched mount can make is_dir() succeed (return True) while
+        # a later exists() call still raises, and that must not turn a
+        # perfectly valid, usable working directory into a failed run.
+        try:
+            exists = cwd_path.exists()
+        except OSError:
+            exists = True
+        problem = "is not a directory" if exists else "not found"
+        return _failed_run(f"working directory {problem}: {str(cwd_path)!r}")
 
     try:
         proc = subprocess.run(
             [*base_command, *pytest_args],
-            cwd=str(cwd),
+            cwd=str(cwd_path),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -60,23 +104,25 @@ def run_pytest(
             counts=None,
             parse_error=f"pytest did not finish within {timeout_s}s and was killed",
         )
-    except FileNotFoundError:
-        # A misconfigured --command (a typo, or a wrapper like "poetry"
-        # that isn't actually installed) would otherwise crash this
-        # process outright with an unhandled traceback instead of failing
-        # open like every other "couldn't verify" case.
-        return RunResult(
-            returncode=-1,
-            stdout="",
-            stderr="",
-            counts=None,
-            parse_error=f"could not find or run the test command: {base_command[0]!r}",
-        )
+    except OSError as exc:
+        # Covers FileNotFoundError (a --command wrapper like "poetry" that
+        # isn't installed), PermissionError, and the Windows-only
+        # NotADirectoryError / WinError 87 shapes. Anything here would
+        # otherwise crash this process with an unhandled traceback instead
+        # of failing open like every other "couldn't verify" case.
+        return _failed_run(f"could not find or run the test command: {base_command[0]!r} ({exc})")
 
     return result_from_captured_output(proc.returncode, proc.stdout, proc.stderr)
 
 
-def result_from_captured_output(returncode: int, stdout: str, stderr: str = "") -> RunResult:
+def result_from_captured_output(returncode: int, stdout, stderr: str = "") -> RunResult:
+    """stdout is coerced rather than trusted: this is a public, exported
+    helper, and CI callers hand it whatever their pipeline captured."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    elif not isinstance(stdout, str):
+        stdout = "" if stdout is None else str(stdout)
+
     counts = parse_summary_line(stdout)
     parse_error = None if counts is not None else "no pytest summary line found in the captured output"
     return RunResult(returncode=returncode, stdout=stdout, stderr=stderr, counts=counts, parse_error=parse_error)

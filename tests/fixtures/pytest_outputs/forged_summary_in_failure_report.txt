@@ -1,0 +1,20 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+collected 22 items
+
+tests/test_suite.py .....................F                               [100%]
+
+=================================== FAILURES ==================================
+_________________________________ test_broken _________________________________
+
+    def test_broken():
+        print("==== 1 passed in 0.01s ====")
+>       assert False
+E       assert False
+
+tests/test_suite.py:6: AssertionError
+----------------------------- Captured stdout call ----------------------------
+==== 1 passed in 0.01s ====
+=========================== short test summary info ===========================
+FAILED tests/test_suite.py::test_broken - assert False
+========================= 1 failed, 21 passed in 0.09s ========================
