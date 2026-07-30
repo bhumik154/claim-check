@@ -8,6 +8,34 @@ from typing import Optional
 
 from .models import Claim, RunResult, PytestCounts, Verdict
 
+# Long enough for any legitimate claim ("all 12345 tests passing" is 24), short
+# enough that nothing interesting fits in the remainder.
+_MAX_RENDERED_CLAIM = 60
+
+
+def _rendered(raw_text: str) -> str:
+    """Whitespace-collapsed, length-capped rendering of matched claim text.
+
+    raw_text is a verbatim slice of a commit message, and the verdict message
+    built from it is handed straight back to the model as the PreToolUse
+    denial reason. The commit message is not necessarily the agent's own
+    prose - it may have been assembled from an issue body, a changelog, or a
+    file - so it is untrusted input on a path that reaches the model.
+
+    The claim regexes bound what can appear here to digits, whitespace and a
+    few literal words, so arbitrary instruction text cannot be smuggled
+    through. Two things still can: "\\s+" matches newlines, so a claim can
+    carry line breaks that escape the quoted context, and "\\d+" is unbounded,
+    so it can carry thousands of digits. Both are closed here.
+
+    The truncation marker is deliberately ASCII: this string gets printed to
+    a console that has twice been cp1252 on this project.
+    """
+    collapsed = " ".join(raw_text.split())
+    if len(collapsed) > _MAX_RENDERED_CLAIM:
+        collapsed = collapsed[: _MAX_RENDERED_CLAIM - 3] + "..."
+    return collapsed
+
 
 def evaluate(message: str, run_result: RunResult) -> Verdict:
     from .claims import extract_claims
@@ -60,11 +88,11 @@ def _mismatch_reason(claim: Claim, counts: PytestCounts) -> Optional[str]:
         # can be verified as complete. Checked before any claim-specific
         # comparison, so it applies uniformly to every claim kind.
         plural = "" if counts.errors == 1 else "s"
-        return f'claimed "{claim.raw_text}" but the run reported {counts.errors} error{plural}; the total is unverified'
+        return f'claimed "{_rendered(claim.raw_text)}" but the run reported {counts.errors} error{plural}; the total is unverified'
 
     if claim.kind == "n_passed":
         if claim.claimed_passed != counts.passed:
-            return f'claimed "{claim.raw_text}" but {counts.passed} actually passed'
+            return f'claimed "{_rendered(claim.raw_text)}" but {counts.passed} actually passed'
         return None
 
     if claim.kind == "n_of_m":
@@ -72,20 +100,20 @@ def _mismatch_reason(claim: Claim, counts: PytestCounts) -> Optional[str]:
             # Same vacuity guard the all_pass branch already applies: a
             # ratio claim against a run that collected nothing is not
             # something a pytest run can make true.
-            return f'claimed "{claim.raw_text}" but 0 tests were collected'
+            return f'claimed "{_rendered(claim.raw_text)}" but 0 tests were collected'
         if claim.claimed_passed != counts.passed or claim.claimed_total != counts.total:
-            return f'claimed "{claim.raw_text}" but actual result is {counts.passed}/{counts.total}'
+            return f'claimed "{_rendered(claim.raw_text)}" but actual result is {counts.passed}/{counts.total}'
         return None
 
     if claim.kind == "all_pass":
         if counts.total == 0:
             # Vacuously true if you only check failed == 0; almost
             # certainly not what was meant by "all tests pass".
-            return f'claimed "{claim.raw_text}" but 0 tests were collected'
+            return f'claimed "{_rendered(claim.raw_text)}" but 0 tests were collected'
         if counts.failed != 0:
-            return f'claimed "{claim.raw_text}" but {counts.failed} test(s) failed'
+            return f'claimed "{_rendered(claim.raw_text)}" but {counts.failed} test(s) failed'
         if claim.claimed_total is not None and claim.claimed_total != counts.total:
-            return f'claimed "{claim.raw_text}" but actual total is {counts.total}'
+            return f'claimed "{_rendered(claim.raw_text)}" but actual total is {counts.total}'
         return None
 
     raise ValueError(f"unknown claim kind: {claim.kind!r}")

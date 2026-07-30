@@ -1,0 +1,19 @@
+{
+  "name": "claim-check",
+  "description": "Mechanical verification that a stated test count matches what the suite actually did.",
+  "owner": {
+    "name": "Bhumik Khatwani"
+  },
+  "plugins": [
+    {
+      "name": "claim-check",
+      "description": "Verifies test-count claims against real pytest output before a commit lands. If the message makes no claim, it does nothing.",
+      "author": {
+        "name": "Bhumik Khatwani"
+      },
+      "category": "testing",
+      "source": "./",
+      "homepage": "https://github.com/bhumik154/claim-check"
+    }
+  ]
+}
