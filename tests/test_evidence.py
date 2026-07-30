@@ -171,3 +171,58 @@ def test_an_unparseable_command_is_treated_as_scoped(project):
 
 def test_empty_argv_is_treated_as_scoped():
     assert evidence.is_scoped([]) is True
+
+
+# --- real commands are shell pipelines, not bare pytest invocations ----------
+# Measured against a live session: the Bash tool's command is the whole shell
+# line, e.g. `cd /repo && python -m pytest -q 2>&1 | tail -1`. The first
+# version of is_scoped assumed argv was only the pytest invocation, so it read
+# "cd" as a path argument and marked every real run scoped - which would have
+# made the evidence store useless without ever being wrong in a unit test.
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cd /repo && python -m pytest -q 2>&1 | tail -1',
+        'cd /repo && pytest',
+        'cd "/c/Claude Code/projects/claim-check" && python -m pytest -q',
+        'python -m pytest -q 2>&1 | tail -1',
+        'pytest > out.txt',
+        'pytest 2>&1 | tee log.txt',
+        'cd backend && poetry run pytest && echo done',
+    ],
+)
+def test_whole_suite_runs_inside_a_shell_pipeline_are_not_scoped(command):
+    import shlex
+
+    assert evidence.is_scoped(shlex.split(command)) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cd /repo && pytest -k slow',
+        'cd /repo && python -m pytest tests/unit',
+        'pytest -x 2>&1 | tail -1',
+        'cd /repo && pytest --lf | tail -1',
+    ],
+)
+def test_scope_narrowing_survives_the_shell_pipeline(command):
+    import shlex
+
+    assert evidence.is_scoped(shlex.split(command)) is True
+
+
+def test_a_command_with_no_recognisable_pytest_invocation_is_scoped():
+    # "make test" may well run the whole suite, but nothing here can tell.
+    # Unknown scope must never be usable as whole-suite evidence.
+    import shlex
+
+    assert evidence.is_scoped(shlex.split("make test")) is True
+    assert evidence.is_scoped(shlex.split("npm run test")) is True
+
+
+def test_a_narrowed_run_anywhere_in_the_pipeline_marks_the_whole_thing_scoped():
+    import shlex
+
+    assert evidence.is_scoped(shlex.split("pytest && pytest tests/unit")) is True
