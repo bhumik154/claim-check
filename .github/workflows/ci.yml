@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, not only those targeting main. A stacked PR - one
+  # branch based on another rather than on main - otherwise gets no CI at
+  # all, which is exactly when a reviewer most wants to see it.
   pull_request:
-    branches: [main]
 
 jobs:
   test:
