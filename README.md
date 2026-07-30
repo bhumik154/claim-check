@@ -87,7 +87,7 @@ claim-check verify-tests "22 passed" --cwd backend/ -k "not slow"
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
       - id: claim-check
 ```

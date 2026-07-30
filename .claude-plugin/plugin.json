@@ -1,7 +1,7 @@
 {
   "name": "claim-check",
   "description": "Verifies test-count claims against real pytest output before a commit lands. If the message makes no claim, it does nothing.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Bhumik Khatwani"
   },
