@@ -68,6 +68,11 @@ def _mismatch_reason(claim: Claim, counts: PytestCounts) -> Optional[str]:
         return None
 
     if claim.kind == "n_of_m":
+        if counts.total == 0:
+            # Same vacuity guard the all_pass branch already applies: a
+            # ratio claim against a run that collected nothing is not
+            # something a pytest run can make true.
+            return f'claimed "{claim.raw_text}" but 0 tests were collected'
         if claim.claimed_passed != counts.passed or claim.claimed_total != counts.total:
             return f'claimed "{claim.raw_text}" but actual result is {counts.passed}/{counts.total}'
         return None
