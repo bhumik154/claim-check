@@ -10,7 +10,7 @@ This tool does exactly that check, mechanically, every time: it looks for a test
 
 ## Tested against exact output, not just shape
 
-[`tests/`](tests/) has 153 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, and all three entry points. One example, from the comparison core:
+[`tests/`](tests/) has 236 cases across the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all four entry points, and the plugin manifest. One example, from the comparison core:
 
 ```python
 def test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched():
@@ -87,7 +87,7 @@ claim-check verify-tests "22 passed" --cwd backend/ -k "not slow"
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
       - id: claim-check
 ```
@@ -96,7 +96,16 @@ The `commit-msg` stage isn't enabled by pre-commit's default install. Run `pre-c
 
 This hook runs as `language: system`, deliberately, not `language: python`: a `python`-language hook runs inside pre-commit's own isolated virtualenv, which has none of your project's actual test dependencies (or even pytest itself). Confirmed directly: that misconfiguration doesn't error, it silently prints "could not verify... allowing commit" on every commit, since the runner crash fails open by design. Because it's `system`, **`claim-check` (and your project's own test dependencies) need to be installed in the same environment you actually run `git commit` from**, not a separate one, or the hook has nothing to run against.
 
-**Claude Code hook** (see [`examples/claude-code-settings-snippet.json`](examples/claude-code-settings-snippet.json)), in `.claude/settings.json`:
+**Claude Code plugin** (recommended — see [`PLUGIN.md`](PLUGIN.md)):
+
+```bash
+claude plugin marketplace add bhumik154/claim-check
+claude plugin install claim-check@claim-check
+```
+
+Then restart `claude`; hooks load only at session start, and until you restart the plugin is installed but silently inert. The plugin bundles its own source and runs it with any Python 3.9+ it can find, so **no `pip install` is required** — claim-check has zero runtime dependencies. If no usable interpreter exists, the hook exits silently and every tool call proceeds untouched.
+
+**Claude Code hook, wired by hand** (if you'd rather not install a plugin — see [`examples/claude-code-settings-snippet.json`](examples/claude-code-settings-snippet.json)), in `.claude/settings.json`:
 
 ```json
 {
@@ -107,6 +116,8 @@ This hook runs as `language: system`, deliberately, not `language: python`: a `p
   }
 }
 ```
+
+This form needs `claim-check` on your `PATH`, so it does require installing the package.
 
 ### If claim-check's own environment isn't your project's environment
 

@@ -39,6 +39,22 @@ _DURATION = r"(?P<duration>\d+(?:\.\d+)?)s(?:\s*\(\d+:\d+:\d+\))?"
 _NO_TESTS_BODY_RE = re.compile(r"^no tests ran\s+in\s+" + _DURATION + r"$", re.IGNORECASE)
 _SUMMARY_BODY_RE = re.compile(r"^(?P<body>.*?)\s+in\s+" + _DURATION + r"$")
 
+# "pytest -q" prints its tally undecorated - measured directly: "2 passed in
+# 0.01s", no "=" padding and no session header anywhere in the output. Since
+# the PostToolUse observer receives whatever the agent actually ran, and -q is
+# the commonest way to run a suite, refusing this form meant observing nothing.
+#
+# The "=" padding is what makes a decorated summary self-identifying, so the
+# undecorated form is held to two tighter rules instead: the body must consist
+# ONLY of "<n> <label>" items, and the line must be the final non-empty line of
+# the output. Real -q output satisfies both; a stray log line mid-stream does
+# not, and neither does a line replayed from a failing test's captured stdout,
+# which is always printed before the run's own summary.
+_TALLY_ITEM = r"\d+\s+(?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected)"
+_BARE_SUMMARY_RE = re.compile(
+    r"^(?P<body>" + _TALLY_ITEM + r"(?:\s*,\s*" + _TALLY_ITEM + r")*)\s+in\s+" + _DURATION + r"$"
+)
+
 _COUNT_RE = re.compile(
     r"(?P<count>\d+)\s+(?P<label>passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected)\b"
 )
@@ -96,6 +112,32 @@ def _classify_line(line: str):
     return kind, body, duration, stripped
 
 
+def _classify_final_undecorated_line(text: str):
+    """Returns (kind, body, duration_s, raw_line) for a trailing `pytest -q`
+    tally, or None.
+
+    Only ever inspects the LAST non-empty line. Anything earlier is ordinary
+    output, however tally-shaped it looks.
+    """
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        match = _NO_TESTS_BODY_RE.match(stripped)
+        if match:
+            return "no_tests", "", float(match.group("duration")), stripped
+
+        match = _BARE_SUMMARY_RE.match(stripped)
+        if match:
+            try:
+                return "summary", match.group("body"), float(match.group("duration")), stripped
+            except ValueError:
+                return None
+        return None
+    return None
+
+
 def parse_summary_line(pytest_output: str) -> Optional[PytestCounts]:
     """Returns None if no summary line (and no "no tests ran" line) is found
     at all - that means pytest crashed before reaching normal reporting
@@ -141,7 +183,12 @@ def parse_summary_line(pytest_output: str) -> Optional[PytestCounts]:
 
     finals = [segment[-1] for segment in segments if segment]
     if not finals:
-        return None
+        # No decorated summary anywhere. Fall back to the undecorated form,
+        # accepted only as the final non-empty line - see _BARE_SUMMARY_RE.
+        undecorated = _classify_final_undecorated_line(text)
+        if undecorated is None:
+            return None
+        finals = [undecorated]
 
     totals = {field: 0 for field in _COUNT_FIELDS}
     total_duration = 0.0
