@@ -7,7 +7,7 @@ omit several things entirely. Everything below was **measured**, not read from
 documentation. Anything still unmeasured is marked as such and handled
 defensively in code.
 
-## 1. Cross-platform launching is a solved problem — use a polyglot file
+## 1. Cross-platform launching is a solved problem: use a polyglot file
 
 The `superpowers` plugin ships a single `hooks/run-hook.cmd` that is
 simultaneously a valid Bash script and a valid Windows batch file:
@@ -34,26 +34,26 @@ A polyglot file makes that entire risk and its mitigation unnecessary.
 **Critical naming constraint**, from that file's own comment:
 
 > Hook scripts use extensionless filenames (e.g. "session-start" not
-> "session-start.sh") so Claude Code's Windows auto-detection — which prepends
-> "bash" to any command containing .sh — doesn't interfere.
+> "session-start.sh") so Claude Code's Windows auto-detection, which prepends
+> "bash" to any command containing .sh, doesn't interfere.
 
 So the launcher must **not** have a `.sh` extension, and any script it
 delegates to should be extensionless.
 
-## 2. Interpreter startup is cheap — the Stop hook is viable
+## 2. Interpreter startup is cheap: the Stop hook is viable
 
 Measured on the target machine, 5 runs:
 
 | Measurement | Time |
 |---|---|
-| `python -c "pass"` | 75–79 ms |
+| `python -c "pass"` | 75-79 ms |
 | `python -c "import claim_check.claims"` (via `PYTHONPATH=src`) | 122 ms |
 
-The design review flagged 150–800 ms as a plausible Windows floor and warned
+The design review flagged 150-800 ms as a plausible Windows floor and warned
 that a per-turn Stop hook might be a product-level non-starter. At ~120 ms for
 a full parse-capable import, it is not. **The Stop hook is affordable.**
 
-This still argues for keeping the cheap path's import graph small — do not
+This still argues for keeping the cheap path's import graph small, do not
 import `subprocess`, `shlex`, or `argparse` on the no-claim path.
 
 ## 3. Transcript format
@@ -91,7 +91,7 @@ scanning backwards for `type == "assistant"` and taking its last `text` block,
 skipping records whose content holds only `tool_use`.**
 
 `isSidechain` was `false` on all 427 main-transcript records and `true` on
-none — subagent output goes to separate files. The Stop hook reading the main
+none, subagent output goes to separate files. The Stop hook reading the main
 transcript will not mistake a subagent's message for the main agent's.
 
 ## 4. Bash tool result shape
@@ -108,7 +108,7 @@ noOutputExpected  bool   (present on some, absent on others)
 ```
 
 **There is no `exit_code`.** A pytest run's success or failure must be derived
-from the summary line, not from a return code — which is what
+from the summary line, not from a return code, which is what
 `pytest_parser.parse_summary_line` already does.
 
 In this one session, **19 Bash results had `"passed"` in stdout**, so real
@@ -133,7 +133,7 @@ the transcript for `stop_hook_summary` to confirm the hook actually ran, which
 addresses the "hooks load only at session start, so it's silently inert"
 failure mode.
 
-## 6. Still unmeasured — handled defensively
+## 6. Still unmeasured: handled defensively
 
 These require a live hook invocation, which requires installing the plugin and
 restarting Claude Code. Rather than a throwaway capture plugin, the hooks ship

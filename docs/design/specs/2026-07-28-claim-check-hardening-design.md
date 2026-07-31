@@ -55,7 +55,7 @@ real guarantee for a cosmetic annoyance. Documented in the README instead.
 
 ## Design
 
-### 1. `claims.py` — containment resolution
+### 1. `claims.py`: containment resolution
 
 Fixes findings 1, 2, 3, 11, 12.
 
@@ -92,7 +92,7 @@ Two regex repairs alongside:
 - `\b(not|n't|never)\s*$` becomes `(?:\bnot|\bnever|n't)\s*$`, making the
   contraction branch reachable.
 
-### 2. `pytest_parser.py` — segmented, line-based scanning
+### 2. `pytest_parser.py`: segmented, line-based scanning
 
 Fixes findings 4, 5, 6.
 
@@ -112,7 +112,7 @@ the `real_xdist_output.txt` fixture, which was captured mid-stream without a hea
 report, which pytest prints *before* the final summary line. A line printed by a test
 therefore always precedes its own session's real summary, so it can never be the last
 line in its segment. The documented multi-invocation aggregation survives untouched,
-because real piped output carries one session header per invocation — confirmed
+because real piped output carries one session header per invocation, confirmed
 against the `multi_suite_piped.txt` fixture.
 
 **Why this kills the ReDoS.** The quadratic blowup came from `=+` and `.*?`
@@ -128,7 +128,7 @@ padding before matching removes the ambiguity entirely; a 60,000-character line 
 required. Segmentation is what defeats the spoof; requiring the closing bracket adds
 little and risks breaking trimmed CI logs fed through `--pytest-output`.
 
-### 3. `runner.py` — fail open on every misconfiguration
+### 3. `runner.py`: fail open on every misconfiguration
 
 Fixes findings 7, 8, 10.
 
@@ -147,7 +147,7 @@ no-op that green-lights every commit while reporting what looks like success. Si
 non-verification is the worst possible outcome for a verification tool, so a config
 mistake should be loud.
 
-### 4. Entry points — a structural fail-open guarantee
+### 4. Entry points: a structural fail-open guarantee
 
 Fixes finding 9, and the general class.
 
@@ -190,12 +190,12 @@ Strict TDD. Every finding gets a regression test written first and observed fail
 in the repo's existing descriptive naming style, added to the matching existing test
 file:
 
-- `test_claims.py` — findings 1, 2, 3, 11, 12
-- `test_pytest_parser.py` — findings 4, 5, 6, plus segmentation and aggregation
-- `test_runner.py` — findings 7, 8, 10
-- `test_cli.py`, `test_precommit_entrypoint.py`, `test_claude_hook_entrypoint.py` — finding 9 and the structural fail-open guarantee
-- `test_shell_parser.py` — findings 13, 14
-- `test_compare.py` — finding 15
+- `test_claims.py`, findings 1, 2, 3, 11, 12
+- `test_pytest_parser.py`, findings 4, 5, 6, plus segmentation and aggregation
+- `test_runner.py`, findings 7, 8, 10
+- `test_cli.py`, `test_precommit_entrypoint.py`, `test_claude_hook_entrypoint.py`, finding 9 and the structural fail-open guarantee
+- `test_shell_parser.py`, findings 13, 14
+- `test_compare.py`, finding 15
 
 New fixtures for the spoofing and multi-session cases, following the existing
 `tests/fixtures/pytest_outputs/` convention of real captured output.
@@ -206,7 +206,7 @@ signal to bring back for a decision, not something to quietly amend.
 ## Documentation
 
 The README's stated case count ("110 cases") will change and must be re-verified
-against real pytest output before commit — this repo's own hook checks that claim,
+against real pytest output before commit, this repo's own hook checks that claim,
 and getting it wrong would be the exact failure the project was built to catch.
 
 README updates:
