@@ -1,5 +1,7 @@
 # claim-check
 
+[![CI](https://github.com/bhumik154/claim-check/actions/workflows/ci.yml/badge.svg)](https://github.com/bhumik154/claim-check/actions/workflows/ci.yml)
+
 Checks whether the test count in your commit message is actually true.
 
 If a commit message says "22 passed" or "all tests pass", claim-check runs pytest and compares the numbers. If they don't match, the commit is blocked. If the message doesn't mention tests at all, nothing happens.
@@ -39,8 +41,10 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 
 ### As a CLI
 
+Not on PyPI yet, so install from the repo:
+
 ```bash
-pip install claim-check
+pip install git+https://github.com/bhumik154/claim-check@v0.2.0
 ```
 
 ```bash

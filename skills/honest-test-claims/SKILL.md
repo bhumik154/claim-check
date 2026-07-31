@@ -56,8 +56,8 @@ rather than "22 passed".
 ## What this skill does not ask
 
 It does not ask you to run the test suite before finishing every task. If you
-are not making a claim about test results, there is nothing here to satisfy , 
-say nothing about counts and this skill is irrelevant.
+are not making a claim about test results, there is nothing here to satisfy.
+Say nothing about counts and this skill is irrelevant.
 
 The rule is about not asserting numbers you have not observed. It is not a
 requirement to generate numbers.
