@@ -1,7 +1,5 @@
 # claim-check Parser Hardening Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Fix fifteen confirmed defects in claim-check v0.1.0, two that let a false test-count claim pass verification, three that block honest commits (two with a raw traceback), without changing the tool's public interface.
 
 **Architecture:** Six root-cause fixes across six modules. The two structural ones: `claims.py` gains a containment-resolution stage that must run *before* negation filtering, and `pytest_parser.py` moves from whole-text regex scanning to per-line classification segmented on pytest's session header, taking the last summary line per segment. The rest are fail-open hardening at the process boundaries.
