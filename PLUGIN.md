@@ -14,7 +14,7 @@ claude plugin marketplace add bhumik154/claim-check
 claude plugin install claim-check@claim-check
 ```
 
-Then **restart `claude`**. See the next section — this is not optional.
+Then **restart `claude`**. See the next section, this is not optional.
 
 ### No `pip install` required
 
@@ -43,8 +43,8 @@ git commit -m "9999 passed"
 
 ## What it checks
 
-The commit message is scanned for a test-count claim — `"22 passed"`,
-`"15/17 passing"`, `"all tests pass"`, `"all 22 tests pass"` — and if one is
+The commit message is scanned for a test-count claim, `"22 passed"`,
+`"15/17 passing"`, `"all tests pass"`, `"all 22 tests pass"`, and if one is
 found, pytest is run and the claim compared against its summary line.
 
 | Situation | Result |
@@ -69,13 +69,13 @@ of paying for a second full suite run to find out.
 
 Recorded per run: the counts from the summary line, the exact command, the
 working directory, the session id, and a cheap fingerprint of the source tree
-(file paths, sizes and mtimes — never contents).
+(file paths, sizes and mtimes, never contents).
 
 Two things about how that evidence is treated:
 
 - **Staleness only ever downgrades evidence to "unknown".** If the tree
   changed, the record aged out, or the file is unreadable, the answer is "no
-  usable evidence" — never "the claim is false". A bug in the cache can cost
+  usable evidence", never "the claim is false". A bug in the cache can cost
   you a missed catch; it cannot produce a false accusation.
 - **Scope-narrowing runs are marked unusable for whole-suite claims.** A run
   with `-k`, `-m`, `-x`, `--lf`, or an explicit path reports a true tally for a
@@ -100,11 +100,11 @@ in `hooks/hooks.json` and append flags:
 "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" claude_hook --command "poetry run pytest" --timeout 60
 ```
 
-- `--command` — override the test runner. Needed when your project's
+- `--command`, override the test runner. Needed when your project's
   dependencies live in an environment that is not the one the hook's Python
   can see (poetry, hatch, pipenv, a container). Without it, the hook may find
   no pytest at all and silently verify nothing.
-- `--timeout` — seconds before the run is killed and the commit allowed
+- `--timeout`, seconds before the run is killed and the commit allowed
   through (default 120). Must be greater than zero; `0` and negative values
   are rejected, because a non-positive timeout kills every run instantly and
   silently verifies nothing forever.
@@ -137,14 +137,15 @@ matter most for the plugin:
 - **It cannot know what "the full suite" means to you.** It compares your
   claim against whatever pytest collects for its own invocation, in its own
   directory. If your claim is about a broader scope than the hook's run, it
-  will report a mismatch on an honest claim. Read the warning at the top of
-  the README's Usage section before installing.
+  will report a mismatch on an honest claim. Read
+  [Read this before you rely on it](README.md#read-this-before-you-rely-on-it)
+  before installing.
 
 ## Troubleshooting
 
 **Nothing happens on a wrong count.** Restart `claude`. Hooks load only at
 session start. If it still does nothing, check that a test-count claim is
-actually present in the message — no claim means no check, by design.
+actually present in the message, no claim means no check, by design.
 
 **Every commit prints "could not verify".** The hook's Python cannot find
 pytest, or cannot find your project's test dependencies. Use `--command`.

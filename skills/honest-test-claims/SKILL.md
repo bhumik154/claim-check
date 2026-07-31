@@ -41,7 +41,7 @@ The pytest summary line, verbatim, from a run in this session:
 
 That line is authoritative. Do not re-derive a total by counting individual
 `PASSED` lines, and do not adjust a previous run's number in your head to
-account for edits you made since — rerun instead.
+account for edits you made since, rerun instead.
 
 ## Scope matters as much as the number
 
@@ -56,7 +56,7 @@ rather than "22 passed".
 ## What this skill does not ask
 
 It does not ask you to run the test suite before finishing every task. If you
-are not making a claim about test results, there is nothing here to satisfy —
+are not making a claim about test results, there is nothing here to satisfy , 
 say nothing about counts and this skill is irrelevant.
 
 The rule is about not asserting numbers you have not observed. It is not a

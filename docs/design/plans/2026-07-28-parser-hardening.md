@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix fifteen confirmed defects in claim-check v0.1.0 — two that let a false test-count claim pass verification, three that block honest commits (two with a raw traceback) — without changing the tool's public interface.
+**Goal:** Fix fifteen confirmed defects in claim-check v0.1.0, two that let a false test-count claim pass verification, three that block honest commits (two with a raw traceback), without changing the tool's public interface.
 
 **Architecture:** Six root-cause fixes across six modules. The two structural ones: `claims.py` gains a containment-resolution stage that must run *before* negation filtering, and `pytest_parser.py` moves from whole-text regex scanning to per-line classification segmented on pytest's session header, taking the last summary line per segment. The rest are fail-open hardening at the process boundaries.
 
@@ -30,7 +30,7 @@ Fixes findings 1, 2, 3, 11, 12. The bug: `max(candidates, key=lambda c: c.span[0
 
 **Interfaces:**
 - Consumes: `Claim` from `claim_check.models` (unchanged).
-- Produces: `extract_claims(message: str) -> list[Claim]` — signature unchanged; behavior corrected.
+- Produces: `extract_claims(message: str) -> list[Claim]`, signature unchanged; behavior corrected.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -106,7 +106,7 @@ def test_comma_before_a_genuine_claim_still_registers():
 
 Run: `python -m pytest tests/test_claims.py -v -k "ratio or thousands or contraction or comma_before"`
 
-Expected: FAIL. `test_ratio_claim_spelled_passed_...` fails with `assert 'n_passed' == 'n_of_m'`; `test_negated_ratio_claim_spelled_passed_...` fails with a non-empty list; `test_thousands_separator_...` fails with a claim of 22; the contraction test fails with a registered claim. `test_comma_before_a_genuine_claim_still_registers` should PASS already — it is a regression guard, not a bug reproduction.
+Expected: FAIL. `test_ratio_claim_spelled_passed_...` fails with `assert 'n_passed' == 'n_of_m'`; `test_negated_ratio_claim_spelled_passed_...` fails with a non-empty list; `test_thousands_separator_...` fails with a claim of 22; the contraction test fails with a registered claim. `test_comma_before_a_genuine_claim_still_registers` should PASS already, it is a regression guard, not a bug reproduction.
 
 - [ ] **Step 3: Replace the body of `claims.py` below the imports**
 
@@ -255,7 +255,7 @@ Expected: PASS, all tests including the 18 pre-existing ones.
 
 Run: `python -m pytest -q`
 
-Expected: PASS, no failures. If `test_partial_ratio_claim_with_unequal_numerator_and_denominator_is_still_extracted` or `test_multiple_claims_of_different_kinds_only_the_last_in_text_is_kept` fails, stop and report — those encode deliberate policy and must not be edited.
+Expected: PASS, no failures. If `test_partial_ratio_claim_with_unequal_numerator_and_denominator_is_still_extracted` or `test_multiple_claims_of_different_kinds_only_the_last_in_text_is_kept` fails, stop and report, those encode deliberate policy and must not be edited.
 
 - [ ] **Step 6: Commit**
 
@@ -277,7 +277,7 @@ Fixes findings 4, 5, 6. Three defects share one cause: the parser scans the enti
 
 **Interfaces:**
 - Consumes: `PytestCounts` from `claim_check.models` (unchanged).
-- Produces: `parse_summary_line(pytest_output: str) -> Optional[PytestCounts]` and `strip_ansi(text: str) -> str` — signatures unchanged.
+- Produces: `parse_summary_line(pytest_output: str) -> Optional[PytestCounts]` and `strip_ansi(text: str) -> str`, signatures unchanged.
 
 - [ ] **Step 1: Create the forged-summary fixture**
 
@@ -387,7 +387,7 @@ def test_non_string_input_returns_none_instead_of_raising():
 
 Run: `python -m pytest tests/test_pytest_parser.py -v -k "forge or version_shaped or linear_time or take_the_last or non_string"`
 
-Expected: FAIL. The forge test fails with `assert 22 == 21`; both version-shaped tests fail with `ValueError: could not convert string to float: '1.2.3'`; the linear-time test fails on the elapsed-time assertion (roughly 100+ seconds — if you do not want to wait, confirm the failure at `"=" * 40000` first); `test_summary_lines_within_one_session_take_the_last_not_the_sum` fails with `assert 12 == 7`; the non-string test fails with `TypeError`.
+Expected: FAIL. The forge test fails with `assert 22 == 21`; both version-shaped tests fail with `ValueError: could not convert string to float: '1.2.3'`; the linear-time test fails on the elapsed-time assertion (roughly 100+ seconds, if you do not want to wait, confirm the failure at `"=" * 40000` first); `test_summary_lines_within_one_session_take_the_last_not_the_sum` fails with `assert 12 == 7`; the non-string test fails with `TypeError`.
 
 - [ ] **Step 4: Rewrite `pytest_parser.py`**
 
@@ -578,7 +578,7 @@ Fixes findings 7, 8, 10. `shlex.split` sits outside the `try`, only `FileNotFoun
 
 **Interfaces:**
 - Produces: `claim_check._args.positive_timeout(raw: str) -> float`, an `argparse` `type=` callable raising `argparse.ArgumentTypeError` for values `<= 0` or unparseable input. Tasks 4 imports it in all three entry points.
-- Produces: `run_pytest(cwd, pytest_args=(), timeout_s=DEFAULT_TIMEOUT_S, command=None) -> RunResult` and `result_from_captured_output(returncode, stdout, stderr="") -> RunResult` — signatures unchanged.
+- Produces: `run_pytest(cwd, pytest_args=(), timeout_s=DEFAULT_TIMEOUT_S, command=None) -> RunResult` and `result_from_captured_output(returncode, stdout, stderr="") -> RunResult`, signatures unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -667,7 +667,7 @@ It already imports `pytest` at the top, so `pytest.raises` needs no new import.
 
 Run: `python -m pytest tests/test_runner.py -v -k "working_directory or unbalanced or whitespace_only or positive_timeout or non_string"`
 
-Expected: FAIL. The `_args` import fails first with `ModuleNotFoundError: No module named 'claim_check._args'` — that is the expected starting failure. After creating the module in Step 3, the remaining tests fail with `NotADirectoryError`, `ValueError: No closing quotation`, `OSError [WinError 87]`, and `TypeError`.
+Expected: FAIL. The `_args` import fails first with `ModuleNotFoundError: No module named 'claim_check._args'`, that is the expected starting failure. After creating the module in Step 3, the remaining tests fail with `NotADirectoryError`, `ValueError: No closing quotation`, `OSError [WinError 87]`, and `TypeError`.
 
 - [ ] **Step 3: Create `src/claim_check/_args.py`**
 
@@ -802,7 +802,7 @@ def result_from_captured_output(returncode: int, stdout, stderr: str = "") -> Ru
 
 Run: `python -m pytest tests/test_runner.py -v`
 
-Expected: PASS, including the 6 pre-existing tests. `test_bad_command_fails_open_with_descriptive_error_instead_of_crashing` must still pass — the command name stays in the message.
+Expected: PASS, including the 6 pre-existing tests. `test_bad_command_fails_open_with_descriptive_error_instead_of_crashing` must still pass, the command name stays in the message.
 
 - [ ] **Step 6: Run the whole suite and commit**
 
@@ -829,7 +829,7 @@ Fixes finding 9 and the general class of crash-blocks-commit. The targeted fixes
 
 **Interfaces:**
 - Consumes: `claim_check._args.positive_timeout` from Task 3.
-- Produces: `precommit.main(argv=None) -> int`, `claude_hook.main(stdin_text=None, argv=None) -> int`, `cli.main(argv=None) -> int` — signatures unchanged.
+- Produces: `precommit.main(argv=None) -> int`, `claude_hook.main(stdin_text=None, argv=None) -> int`, `cli.main(argv=None) -> int`, signatures unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1228,7 +1228,7 @@ Fixes findings 13, 14. `git commit` must currently be tokens 0 and 1, so `git -C
 - Test: `tests/test_shell_parser.py`
 
 **Interfaces:**
-- Produces: `extract_commit_message(command: str) -> Optional[str]` — signature unchanged.
+- Produces: `extract_commit_message(command: str) -> Optional[str]`, signature unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1268,7 +1268,7 @@ def test_heredoc_surrounded_by_text_resolves_instead_of_leaking_a_placeholder():
 
 Run: `python -m pytest tests/test_shell_parser.py -v -k "global_flags or without_a_commit or surrounded_by_text"`
 
-Expected: FAIL. The global-flag assertions return `None`; the heredoc test fails on `assert "\x00" not in message`. `test_git_word_without_a_commit_subcommand_is_still_ignored` should PASS already — it is a guard against the fix over-reaching.
+Expected: FAIL. The global-flag assertions return `None`; the heredoc test fails on `assert "\x00" not in message`. `test_git_word_without_a_commit_subcommand_is_still_ignored` should PASS already, it is a guard against the fix over-reaching.
 
 - [ ] **Step 3: Replace `_find_git_commit_segment` in `shell_parser.py`**
 
@@ -1364,18 +1364,18 @@ git commit -m "Cover git's global flags and stop leaking the heredoc placeholder
 
 ### Task 6: Vacuity consistency in the comparison policy
 
-Fixes finding 15. `all tests pass` against 0 collected tests is correctly flagged, but `0/0 tests pass` against 0 collected currently matches — the same vacuous situation treated two different ways.
+Fixes finding 15. `all tests pass` against 0 collected tests is correctly flagged, but `0/0 tests pass` against 0 collected currently matches, the same vacuous situation treated two different ways.
 
 **Files:**
 - Modify: `src/claim_check/compare.py`
 - Test: `tests/test_compare.py`
 
 **Interfaces:**
-- Produces: `compare_claims(claims, counts) -> Verdict` — signature unchanged.
+- Produces: `compare_claims(claims, counts) -> Verdict`, signature unchanged.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_compare.py`. That file builds `Claim` objects directly through its own `_n_of_m(n, m)` and `_counts(...)` helpers rather than going through the claim parser — follow that pattern, and add no new imports:
+Append to `tests/test_compare.py`. That file builds `Claim` objects directly through its own `_n_of_m(n, m)` and `_counts(...)` helpers rather than going through the claim parser, follow that pattern, and add no new imports:
 
 ```python
 def test_zero_of_zero_claim_with_zero_collected_tests_is_flagged_like_all_pass_is():
@@ -1426,7 +1426,7 @@ git commit -m "Treat a zero-denominator ratio claim as vacuous, like all_pass al
 
 ### Task 7: End-to-end reverification and documentation
 
-Success criteria 2 and 4 from the spec. Every fix so far is unit-tested; this proves the original reproductions are actually dead against a real git repository, then updates the README — including its own test-count claim, which this repo's hook checks.
+Success criteria 2 and 4 from the spec. Every fix so far is unit-tested; this proves the original reproductions are actually dead against a real git repository, then updates the README, including its own test-count claim, which this repo's hook checks.
 
 **Files:**
 - Create: `scripts/smoke_e2e.sh`
@@ -1534,7 +1534,7 @@ Expected: `ALL E2E SCENARIOS PASS`, and the reported hook wall time under 2 seco
 
 Run: `python -m pytest -q 2>&1 | tail -1`
 
-Expected: a line like `NNN passed in X.XXs`. **Record the exact number.** Do not estimate it, and do not reuse 110 — the README states this count, and this repo's own hook verifies it.
+Expected: a line like `NNN passed in X.XXs`. **Record the exact number.** Do not estimate it, and do not reuse 110, the README states this count, and this repo's own hook verifies it.
 
 - [ ] **Step 4: Update the README**
 
@@ -1578,7 +1578,7 @@ claim-check verify-tests "$(grep -o '[0-9]\+ cases' README.md | head -1 | sed 's
 
 Expected: `claim-check: OK - All test-count claims match the actual results.`
 
-If it reports a mismatch, the number in the README is wrong — fix the README, not the test suite.
+If it reports a mismatch, the number in the README is wrong, fix the README, not the test suite.
 
 - [ ] **Step 6: Run the whole suite one final time**
 
