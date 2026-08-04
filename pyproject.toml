@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claim-check"
-version = "0.3.0"
+version = "0.3.1"
 description = "Verify test-count claims in commit messages against real pytest output, as a pre-commit hook, a Claude Code hook, or a standalone CLI."
 readme = "README.md"
 requires-python = ">=3.9"

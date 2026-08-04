@@ -105,3 +105,46 @@ def test_an_unterminated_fence_swallows_the_rest_of_the_message():
 def test_stripping_leaves_ordinary_prose_untouched():
     cleaned = conversation.strip_quoted_output("Plain sentence. 22 passed. Another sentence.")
     assert "22 passed" in cleaned
+
+
+# --- output from runners other than pytest -----------------------------------
+# Captured from a real vitest 2.1.9 run. Its tally is two lines, pipe
+# separated, with a parenthetical total and no "in Xs" duration:
+#
+#      Test Files  1 failed | 1 passed (2)
+#           Tests  1 failed | 3 passed (4)
+#
+# The pytest-shaped stripping missed the "Test Files" line, which is indented
+# by only one space, so a pasted vitest tally produced a claim of "1 passed"
+# from the FILE count while 3 tests actually passed. Reading someone's pasted
+# output as an assertion is the exact false positive this module exists to
+# prevent, and getting a file count confused for a test count makes it worse.
+
+VITEST_TALLY = (
+    " Test Files  1 failed | 1 passed (2)\n"
+    "      Tests  1 failed | 3 passed (4)\n"
+    "   Duration  559ms\n"
+)
+
+
+def test_a_pasted_vitest_tally_is_not_read_as_a_claim():
+    text = "Ran the suite.\n\n" + VITEST_TALLY + "\nLooking at the failure now.\n"
+    assert conversation.extract_claims(text) == []
+
+
+def test_a_passing_vitest_tally_is_not_read_as_a_claim():
+    text = "Ran it.\n\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n\nDone.\n"
+    assert conversation.extract_claims(text) == []
+
+
+def test_a_jest_style_tally_is_not_read_as_a_claim():
+    text = "Output:\n\nTests:       3 passed, 3 total\nSuites:      1 passed, 1 total\n\nNext.\n"
+    assert conversation.extract_claims(text) == []
+
+
+def test_an_assertion_still_survives_beside_a_vitest_tally():
+    text = VITEST_TALLY + "\nAll 3 tests pass now.\n"
+    claims = conversation.extract_claims(text)
+    assert len(claims) == 1
+    assert claims[0].kind == "all_pass"
+    assert claims[0].claimed_total == 3

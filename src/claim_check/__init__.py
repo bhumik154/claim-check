@@ -7,7 +7,7 @@ from .pytest_parser import parse_summary_line, strip_ansi
 from .runner import result_from_captured_output, run_pytest
 from .shell_parser import extract_commit_message
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "__version__",
