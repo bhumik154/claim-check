@@ -91,6 +91,41 @@ file the agent under verification could simply edit.
 Delete that directory at any time; it is a cache, and losing it only means the
 next claim goes unverified rather than wrongly flagged.
 
+## What it checks at the end of a turn
+
+A `Stop` hook also checks claims made **in conversation**, which is the more
+common case than a commit message: an agent writing "all tests pass" in a
+summary, having run nothing.
+
+**It reports and never blocks.** If the last thing the agent said contradicts
+a real test run from earlier in the same session, you get a note. Nothing is
+denied, nothing is retried.
+
+**It never runs pytest.** It compares against what the observer already
+recorded. Running a suite at the end of every turn would make this
+unusable.
+
+The bar for saying anything is deliberately high. All of these must hold:
+
+- the final message asserts a count, after quoted output is stripped out
+- fresh evidence exists from this same session
+- that run covered the whole suite, not a `-k` filtered subset
+- that run reported no errors
+- and the claim actually contradicts it
+
+Anything else is silence. Measured across 43 real sessions, claims appear on
+1.8% of turns, so the quiet path is nearly all of them.
+
+Quoted output is stripped first because agents paste pytest's summary line
+constantly, and flagging someone for accurately quoting output would be the
+worst kind of false positive. Measured across 5,724 real assistant turns,
+that stripping removes 3% of raw detections and keeps the rest.
+
+Set `CLAIM_CHECK_VERBOSE=1` if you also want a note when a claim could not be
+checked at all. It is off by default because roughly half of claims have no
+usable evidence, and a steady stream of notes you can do nothing about is how
+a tool gets uninstalled.
+
 ## Configuration
 
 The hook reads no config file. To change its behaviour, edit the `command`
