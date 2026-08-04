@@ -30,7 +30,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.3.0
+    rev: v0.3.1
     hooks:
       - id: claim-check
 ```
@@ -46,7 +46,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.3.0
+pip install git+https://github.com/bhumik154/claim-check@v0.3.1
 ```
 
 ```bash
@@ -121,7 +121,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 288 cases covering the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 292 cases covering the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 One example, from the comparison core:
 

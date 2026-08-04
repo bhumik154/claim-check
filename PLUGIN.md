@@ -29,13 +29,59 @@ for an interpreter in this order, requiring 3.9+:
 If no usable interpreter is found, the hook exits silently and every tool call
 proceeds untouched. A missing Python is never a reason to block your work.
 
-## Hooks load only at session start
+## Updating, and why an update can appear to do nothing
 
-A newly installed or updated plugin is **silently inert** until you restart
-`claude`. There is no error and no warning; the hook simply never fires.
+```bash
+claude plugin update claim-check@claim-check
+```
 
-To confirm it is actually loaded, make a commit with a deliberately wrong
-count in a repo with a test suite and check that it gets denied:
+The `@marketplace` suffix is required. Without it you get
+`Plugin "claim-check" not found`, which reads like the plugin is missing
+rather than like an argument is malformed. There is also an Update button in
+the desktop app under Settings, Plugins.
+
+**The version number is the update mechanism.** Both the command and the
+button decide whether to do anything by comparing versions. Ship a change
+without bumping and you get `already at the latest version` while the
+installed copy silently lacks it. If you fork this and change anything under
+`hooks/` or `src/`, bump `.claude-plugin/plugin.json` or your update will
+quietly no-op.
+
+### Code updates apply live. New hooks do not.
+
+These behave differently, and the difference is not obvious:
+
+| What changed | Takes effect |
+|---|---|
+| Python under `src/` | Immediately, on the next hook invocation |
+| An existing hook's flags in `hooks.json` | Immediately |
+| A **new event** added to `hooks.json` | Only after restarting `claude` |
+
+The launcher spawns a fresh interpreter for every invocation and reads source
+from disk, so code changes land straight away. The event-to-command mapping,
+though, is read once when the session starts and is fixed for its lifetime. A
+newly declared `Stop` hook is therefore invisible to the running session no
+matter how current the installed copy is.
+
+Confirmed directly: after updating to a version declaring three hooks,
+`claude plugin details claim-check` reported `Hooks (3)` while the running
+session kept firing two.
+
+### Checking whether it is actually loaded
+
+The quickest signal, if you want proof rather than a guess. Claude Code
+writes a record after Stop hooks run, so count the hooks the session is
+really firing:
+
+```bash
+grep -o '"hookCount":[0-9]*' ~/.claude/projects/<project>/<session>.jsonl | tail -3
+```
+
+That number includes every Stop hook from every plugin, so watch whether it
+goes up after you restart rather than expecting a specific value.
+
+Or just make a commit with a deliberately wrong count in a repo with tests
+and check that it gets denied:
 
 ```bash
 git commit -m "9999 passed"

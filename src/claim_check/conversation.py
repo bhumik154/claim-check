@@ -42,6 +42,24 @@ _SUMMARY_LINE = re.compile(
     re.MULTILINE,
 )
 
+# Tallies from runners this tool does not support. Captured from a real
+# vitest 2.1.9 run, whose summary is two lines with no "in Xs" duration:
+#
+#      Test Files  1 failed | 1 passed (2)
+#           Tests  1 failed | 3 passed (4)
+#
+# Quoting one of those is no more an assertion than quoting pytest, and the
+# "Test Files" line is worse than a plain false positive: its count is FILES,
+# so reading it as a claim reports 1 passed when 3 tests passed. Stripping is
+# the right response even though these runners are unsupported - claim-check
+# has no counts to compare against, so there is nothing here it could ever
+# legitimately check.
+_OTHER_RUNNER_TALLY = re.compile(
+    r"^\s*(?:Test Files|Tests|Test Suites|Suites|Snapshots|Time)\s*:?\s+.*\b\d+\s+"
+    r"(?:passed|failed|skipped|todo|pending|total)\b.*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
 
 def strip_quoted_output(text: str) -> str:
     """Removes the shapes that are quotation rather than assertion.
@@ -53,6 +71,7 @@ def strip_quoted_output(text: str) -> str:
     text = _BLOCKQUOTE.sub("", text)
     text = _INDENTED.sub("", text)
     text = _SUMMARY_LINE.sub("", text)
+    text = _OTHER_RUNNER_TALLY.sub("", text)
     return text
 
 
