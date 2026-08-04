@@ -6,6 +6,8 @@ Checks whether the test count in your commit message is actually true.
 
 If a commit message says "22 passed" or "all tests pass", claim-check runs pytest and compares the numbers. If they don't match, the commit is blocked. If the message doesn't mention tests at all, nothing happens.
 
+As a Claude Code plugin it also checks claims made in conversation, by comparing them against test runs the agent actually made. That part reports and never blocks.
+
 Works as a pre-commit hook, a Claude Code plugin, or a plain CLI. No runtime dependencies.
 
 ## Install
@@ -119,7 +121,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 236 cases covering the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all four entry points, and the plugin manifest.
+[`tests/`](tests/) has 288 cases covering the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 One example, from the comparison core:
 
@@ -163,6 +165,8 @@ The cases worth knowing about:
 | `--pytest-output` pointing at a file that isn't there | Fails open naming the file, not a traceback |
 | `claim-check-precommit` run by hand with a bad path | Fails open with a clear message, not a `FileNotFoundError` |
 | `claim-check-claude-hook` run bare in a terminal with nothing piped in | Exits immediately instead of hanging on `stdin.read()` |
+| A claim in a chat message beside pasted pytest output | The quotation is stripped before anything is looked for. Measured across 5,724 real assistant turns, that removes 3% of raw detections, all of them the agent quoting output rather than asserting a number |
+| A 20 MB session transcript | Only the last 256 KB is read, in under 2 ms. Reading the whole file at the end of every turn is not an option |
 | A nonexistent `--cwd`, an unbalanced quote in `--command`, a malformed hook payload | All fail open with a specific reason. Every entry point also has a catch-all, so no internal error can block a commit |
 
 ## What this is not
@@ -182,6 +186,8 @@ The cases worth knowing about:
 **The pre-commit hook is client-side and `--no-verify` skips it.** Pair it with the CLI in CI if you want actual enforcement rather than a local nudge.
 
 **A test that forges a whole pytest session can still fool it.** Output printed by a test gets replayed in the failure report, which always comes before that session's real summary, so the last-line-per-session rule handles the realistic case. The gap that remains depends on ordering. A forged summary line printed *before* a forged `test session starts` header is believed, because the forged header closes the segment right after the forged line and its count gets added to the real one. The reverse order is safe: both summaries land in the same segment and the real one still comes last. Both orderings are pinned by tests. Anything that can make a test print output in that exact order can already edit the test suite directly.
+
+**The end-of-turn check reports, it does not block.** It also only speaks when it has fresh, whole-suite, same-session evidence from a run the agent itself made, and stays silent otherwise. Roughly half of claims have no such evidence, so about half go unchecked. That is deliberate: unknown is never reported as wrong.
 
 **An honest claim that mentions an error still gets flagged.** `"22 passed, 1 error"` against a real 22-passed-1-error run is reported as a mismatch, because an error means some test never ran and the true denominator is unknown. That strictness is what makes a bare count mean anything.
 
