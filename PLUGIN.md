@@ -67,6 +67,23 @@ Confirmed directly: after updating to a version declaring three hooks,
 `claude plugin details claim-check` reported `Hooks (3)` while the running
 session kept firing two.
 
+### `plugin details` reports the source version, not the installed one
+
+For a marketplace sourced from a local directory, `claude plugin details`
+reads the version from that directory, which is your working tree. It will
+happily tell you 0.3.1 while 0.3.0 is what is actually installed and running.
+
+The registry is the honest answer:
+
+```bash
+grep -A3 claim-check ~/.claude/plugins/installed_plugins.json
+```
+
+Or just look at which version directories exist under
+`~/.claude/plugins/cache/<marketplace>/<plugin>/`. Every install leaves its
+own, so the newest directory is what you last installed, not what your source
+tree currently says.
+
 ### Checking whether it is actually loaded
 
 The quickest signal, if you want proof rather than a guess. Claude Code
