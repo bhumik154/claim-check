@@ -56,6 +56,32 @@ a full parse-capable import, it is not. **The Stop hook is affordable.**
 This still argues for keeping the cheap path's import graph small, do not
 import `subprocess`, `shlex`, or `argparse` on the no-claim path.
 
+### Correction: the real cost is ~300 ms, not ~120 ms
+
+The 122 ms above measured the wrong thing. It timed the interpreter and the
+import, and left out the bash launcher and the process spawn that wrap them,
+which is most of the remaining cost.
+
+Claude Code reports each hook's duration in its `stop_hook_summary` record.
+Across the first five real invocations of the Stop hook:
+
+| | |
+|---|---|
+| min | 261 ms |
+| max | 419 ms |
+| mean | **297 ms** |
+
+That is 2.5x the figure originally recorded here. The conclusion survives:
+297 ms sits comfortably inside the 10 second hook timeout and is unlikely to
+be perceptible. But it is ~300 ms added to the end of every turn, not ~120,
+and the number published here should be the one that was observed rather than
+the one that was estimated.
+
+The lesson generalises past this measurement. Timing a component in isolation
+answers a question about that component, not about the cost the user pays.
+Anything measured for a latency budget has to be measured at the boundary the
+budget is actually about.
+
 ## 3. Transcript format
 
 Location: `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`.
