@@ -30,7 +30,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.2.0
+    rev: v0.3.0
     hooks:
       - id: claim-check
 ```
@@ -46,7 +46,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.2.0
+pip install git+https://github.com/bhumik154/claim-check@v0.3.0
 ```
 
 ```bash
