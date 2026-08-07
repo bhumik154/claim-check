@@ -226,3 +226,40 @@ def test_a_narrowed_run_anywhere_in_the_pipeline_marks_the_whole_thing_scoped():
     import shlex
 
     assert evidence.is_scoped(shlex.split("pytest && pytest tests/unit")) is True
+
+
+# --- runners other than pytest ------------------------------------------------
+
+VITEST_OUTPUT = " Test Files  1 passed (1)\n      Tests  3 passed (3)\n   Duration  577ms\n"
+JEST_OUTPUT = (
+    "Test Suites: 1 passed, 1 total\n"
+    "Tests:       1 skipped, 1 todo, 3 passed, 5 total\n"
+    "Time:        0.485 s\n"
+)
+
+
+def test_a_vitest_run_is_recorded_as_evidence(project):
+    record = evidence.record_run(project, "s1", "npx vitest run", VITEST_OUTPUT)
+    assert record is not None
+    assert record["counts"]["passed"] == 3
+    assert record["scoped"] is False
+
+
+def test_a_jest_run_is_recorded_as_evidence(project):
+    record = evidence.record_run(project, "s1", "npx jest", JEST_OUTPUT)
+    assert record["counts"]["passed"] == 3
+    assert record["counts"]["skipped"] == 2
+    assert record["scoped"] is False
+
+
+def test_a_filtered_js_run_is_recorded_but_marked_scoped(project):
+    # Same hazard as pytest -k: a true tally for a subset must never be
+    # usable to confirm a claim about the whole suite.
+    record = evidence.record_run(project, "s1", "npx jest -t login", JEST_OUTPUT)
+    assert record["scoped"] is True
+
+
+def test_a_js_run_behind_an_npm_script_is_marked_scoped(project):
+    # "npm test" hides which runner ran and with what arguments.
+    record = evidence.record_run(project, "s1", "npm test", VITEST_OUTPUT)
+    assert record["scoped"] is True
