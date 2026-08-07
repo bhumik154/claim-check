@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .models import PytestCounts
-from .pytest_parser import parse_summary_line
+from .runners import parse_test_output
 
 # Test results depend on state that mtimes cannot observe: environment
 # variables, database contents, installed package versions, the clock. Even
@@ -113,6 +113,79 @@ _VALUE_TAKING_FLAGS = frozenset(
 _SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", "|&"})
 
 _RUNNER_TOKENS = frozenset({"python", "python3", "py", "-m", "pytest", "py.test", "poetry", "hatch", "run", "uv", "pipenv", "exec"})
+
+# Every runner narrows scope with its own flags, so the guard has to know
+# which runner it is looking at. Getting this wrong in the permissive
+# direction is the expensive mistake: a filtered run recorded as whole-suite
+# evidence can confirm a claim that a full run would have contradicted, which
+# is worse than not supporting the runner at all.
+_VITEST_NARROWING = frozenset(
+    {
+        "-t",
+        "--testNamePattern",
+        "--changed",
+        "--related",
+        "--bail",
+        "--shard",
+        "--project",
+        "--dir",
+    }
+)
+_VITEST_VALUE_TAKING = frozenset(
+    {"-t", "--testNamePattern", "--bail", "--shard", "--project", "--dir",
+     "--reporter", "-c", "--config", "--root", "--coverage.reporter"}
+)
+_VITEST_BARE = frozenset(
+    {"npx", "npm", "yarn", "pnpm", "bun", "bunx", "exec", "run", "vitest", "dlx"}
+)
+
+_JEST_NARROWING = frozenset(
+    {
+        "-t",
+        "--testNamePattern",
+        "--testPathPattern",
+        "--testPathPatterns",
+        "-o",
+        "--onlyChanged",
+        "--onlyFailures",
+        "--changedSince",
+        "--lastCommit",
+        "--findRelatedTests",
+        "--bail",
+        "--shard",
+        "-f",
+    }
+)
+_JEST_VALUE_TAKING = frozenset(
+    {"-t", "--testNamePattern", "--testPathPattern", "--testPathPatterns",
+     "--shard", "--changedSince", "-c", "--config", "--maxWorkers", "-w",
+     "--reporters", "--testTimeout", "--selectProjects"}
+)
+_JEST_BARE = frozenset(
+    {"npx", "npm", "yarn", "pnpm", "bun", "bunx", "exec", "run", "jest", "dlx"}
+)
+
+# name -> (how to spot it, narrowing flags, value-taking flags, allowed bare tokens)
+_RUNNERS = {
+    "pytest": (
+        lambda t: t == "pytest" or t.endswith("pytest") or t.endswith("py.test"),
+        _SCOPE_NARROWING_FLAGS,
+        _VALUE_TAKING_FLAGS,
+        _RUNNER_TOKENS,
+    ),
+    "vitest": (
+        lambda t: t == "vitest" or t.endswith("/vitest"),
+        _VITEST_NARROWING,
+        _VITEST_VALUE_TAKING,
+        _VITEST_BARE,
+    ),
+    "jest": (
+        lambda t: t == "jest" or t.endswith("/jest"),
+        _JEST_NARROWING,
+        _JEST_VALUE_TAKING,
+        _JEST_BARE,
+    ),
+}
 
 
 def cache_root() -> Path:
@@ -206,11 +279,13 @@ def _pytest_segments(tokens: Sequence[str]) -> list:
         else:
             segments[-1].append(token)
 
-    return [
-        segment
-        for segment in segments
-        if any(token == "pytest" or token.endswith("pytest") or token.endswith("py.test") for token in segment)
-    ]
+    found = []
+    for segment in segments:
+        for name, (matches, _narrowing, _values, _bare) in _RUNNERS.items():
+            if any(matches(token) for token in segment):
+                found.append((name, segment))
+                break
+    return found
 
 
 def is_scoped(argv: Sequence[str]) -> bool:
@@ -223,52 +298,58 @@ def is_scoped(argv: Sequence[str]) -> bool:
     if not argv:
         return True
 
-    pytest_segments = _pytest_segments(argv)
-    if not pytest_segments:
-        # No recognisable pytest invocation. It may well have run the whole
-        # suite ("make test"), but nothing here can establish that, and
-        # unknown scope is never usable as whole-suite evidence.
+    runner_segments = _pytest_segments(argv)
+    if not runner_segments:
+        # No recognisable runner. "npm test" or "make test" may well run
+        # everything, but nothing here can establish that, and unknown scope
+        # is never usable as whole-suite evidence.
         return True
 
-    return any(_segment_is_scoped(segment) for segment in pytest_segments)
+    return any(_segment_is_scoped(name, segment) for name, segment in runner_segments)
 
 
-def _segment_is_scoped(tokens: list) -> bool:
+def _segment_is_scoped(runner: str, tokens: list) -> bool:
+    _matches, narrowing, value_taking, bare_allowed = _RUNNERS[runner]
+    tokens = list(tokens)
 
-    # "-m" is ambiguous: for `python -m pytest` it is the interpreter's module
-    # flag, but for `pytest -m integration` it is a marker filter that narrows
-    # collection. Only the second meaning implies scope, so drop the
-    # interpreter form before parsing. Without this, every ordinary
-    # `python -m pytest` run was marked scoped and no evidence was ever
-    # usable - confirmed directly by the test suite.
-    for position in range(len(tokens) - 1):
-        if tokens[position] == "-m" and tokens[position + 1] in ("pytest", "py.test"):
-            del tokens[position : position + 2]
-            break
+    if runner == "pytest":
+        # "-m" is ambiguous: for `python -m pytest` it is the interpreter's
+        # module flag, but for `pytest -m integration` it is a marker filter
+        # that narrows collection. Only the second meaning implies scope, so
+        # drop the interpreter form before parsing. Without this, every
+        # ordinary `python -m pytest` run was marked scoped and no evidence
+        # was ever usable - confirmed directly against a live session.
+        for position in range(len(tokens) - 1):
+            if tokens[position] == "-m" and tokens[position + 1] in ("pytest", "py.test"):
+                del tokens[position : position + 2]
+                break
 
     index = 0
     while index < len(tokens):
         token = tokens[index]
 
-        if token in _SCOPE_NARROWING_FLAGS:
+        if token in narrowing:
             return True
-        if token.startswith("--") and "=" in token and token.split("=", 1)[0] in _SCOPE_NARROWING_FLAGS:
+        if token.startswith("--") and "=" in token and token.split("=", 1)[0] in narrowing:
             return True
-        # Bundled short flags such as "-xvs" carry -x inside them.
-        if token.startswith("-") and not token.startswith("--") and len(token) > 1:
-            if "x" in token[1:] and not token.startswith("-x="):
-                return True
+        if runner == "pytest":
+            # Bundled short flags such as "-xvs" carry -x inside them. Only
+            # pytest bundles them this way in practice.
+            if token.startswith("-") and not token.startswith("--") and len(token) > 1:
+                if "x" in token[1:] and not token.startswith("-x="):
+                    return True
 
-        if token in _VALUE_TAKING_FLAGS:
+        if token in value_taking:
             index += 2
             continue
         if token.startswith("-"):
             index += 1
             continue
 
-        # A bare token. Runner words are expected; anything else is a path or
-        # a node id, which narrows collection.
-        if token not in _RUNNER_TOKENS and not token.endswith("pytest"):
+        # A bare token. Words belonging to the invocation are expected;
+        # anything else is a path, a node id or a test-name filter, all of
+        # which narrow what runs.
+        if token not in bare_allowed and not _RUNNERS[runner][0](token):
             return True
         index += 1
 
@@ -290,7 +371,7 @@ def record_run(
     Never raises. A failure to write evidence must not disturb the tool call
     being observed.
     """
-    counts = parse_summary_line(stdout)
+    counts = parse_test_output(stdout)
     if counts is None:
         return None
 

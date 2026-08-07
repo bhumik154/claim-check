@@ -80,17 +80,62 @@ claim-check could legitimately check in them, since it has no counts of its
 own to compare against, so treating them as quotation is right regardless of
 whether those runners are ever supported.
 
-## Notes toward supporting them properly
+## jest 29.7.0
 
-- The parse/policy split already holds. `compare.py` never sees raw output,
-  only `PytestCounts`, so a second parser is additive rather than invasive.
-- `PytestCounts` is misnamed the moment a second runner exists, but renaming
-  it is a public API break. It is exported in `__all__`.
-- Runner detection has to come from the command, not the output. The scope
-  guard in `evidence.py` is pytest-flag-shaped (`-k`, `-m`, `--lf`) and every
-  runner narrows scope differently: vitest uses `-t`, jest uses `-t` and
-  `--testPathPattern`. Getting this wrong is how a filtered run confirms a
-  whole-suite claim, so it needs the same conservative bias.
-- jest output was not captured. The tests here use a plausible jest shape
-  (`Tests:  3 passed, 3 total`) and it should be confirmed against a real run
-  before anything depends on it.
+Captured on Windows, Node 24.18.0.
+
+### All passing, with a skip and a todo
+
+```
+Test Suites: 1 passed, 1 total
+Tests:       1 skipped, 1 todo, 3 passed, 5 total
+Snapshots:   0 total
+Time:        0.485 s
+Ran all test suites.
+```
+
+### With a failure
+
+```
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 1 skipped, 1 todo, 3 passed, 6 total
+Time:        0.503 s, estimated 1 s
+```
+
+### No tests
+
+No tally line at all, just pattern diagnostics. Same meaning as vitest's
+sentence: nothing to verify.
+
+jest separates items with commas rather than vitest's `|`, and states the
+total as a trailing `N total` rather than a parenthetical. `Test Suites` is
+its file-level line and carries the same trap as vitest's `Test Files`.
+
+A todo test does not run, exactly like a skipped one, so both are counted as
+skipped. That is what makes the computed total match the total jest states:
+`1 skipped + 1 todo + 3 passed = 5`.
+
+## How this was built
+
+Supported since 0.4.0.
+
+- **`js_parser.py`** handles both runners; they differ only in separator and
+  how the total is written.
+- **`runners.py`** dispatches by content rather than by command string. A
+  command can lie about what it runs; output cannot. Tests pin that each
+  parser declines the other's output, so dispatch order cannot silently
+  decide correctness.
+- **The stated total is used as a checksum.** Both runners state their own
+  total, so if the labels the parser recognises do not add up to it,
+  something went unmapped and the whole result is discarded. An unrecognised
+  label therefore costs a missed check rather than a quiet undercount.
+- **The scope guard is per runner.** `evidence.py` carries a narrowing-flag
+  set for each: pytest's `-k`/`-m`/`--lf`, vitest's `-t`/`--changed`/
+  `--shard`, jest's `-t`/`--testPathPattern`/`--onlyChanged`. A runner it
+  cannot identify, including anything hidden behind `npm test`, is scoped.
+- **`PytestCounts` keeps its name** because it is in `__all__`. `TestCounts`
+  is the same type under a name that aged better. The pytest-specific fields
+  are zero for the JS runners.
+
+Still unsupported: `cargo test`, `go test`, `mocha`, `ava`. Each needs its
+own captured formats and its own narrowing flags before it can be trusted.

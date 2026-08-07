@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/bhumik154/claim-check/actions/workflows/ci.yml/badge.svg)](https://github.com/bhumik154/claim-check/actions/workflows/ci.yml)
 
-Checks whether the test count in your commit message is actually true.
+Checks whether the test count in your commit message is actually true. pytest, vitest and jest.
 
-If a commit message says "22 passed" or "all tests pass", claim-check runs pytest and compares the numbers. If they don't match, the commit is blocked. If the message doesn't mention tests at all, nothing happens.
+If a commit message says "22 passed" or "all tests pass", claim-check runs your suite and compares the numbers. If they don't match, the commit is blocked. If the message doesn't mention tests at all, nothing happens.
 
 As a Claude Code plugin it also checks claims made in conversation, by comparing them against test runs the agent actually made. That part reports and never blocks.
 
@@ -30,7 +30,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.3.1
+    rev: v0.4.0
     hooks:
       - id: claim-check
 ```
@@ -46,7 +46,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.3.1
+pip install git+https://github.com/bhumik154/claim-check@v0.4.0
 ```
 
 ```bash
@@ -121,7 +121,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 292 cases covering the claim parser, the pytest-output parser, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 340 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 One example, from the comparison core:
 
@@ -167,6 +167,10 @@ The cases worth knowing about:
 | `claim-check-claude-hook` run bare in a terminal with nothing piped in | Exits immediately instead of hanging on `stdin.read()` |
 | A claim in a chat message beside pasted pytest output | The quotation is stripped before anything is looked for. Measured across 5,724 real assistant turns, that removes 3% of raw detections, all of them the agent quoting output rather than asserting a number |
 | A 20 MB session transcript | Only the last 256 KB is read, in under 2 ms. Reading the whole file at the end of every turn is not an option |
+| vitest and jest tallies, captured from real runs | Both print a file-level tally *before* the test-level one (`Test Files`, `Test Suites`). Reading the first match reports a file count as a test count, so only the `Tests` line is ever used |
+| A runner whose own stated total disagrees with the parts | Rejected outright. Both JS runners state their total, so an unrecognised label makes the arithmetic disagree, and disagreement returns nothing rather than an undercount |
+| `npm test`, `yarn test`, `make test` | Marked scoped. They may run everything, but the runner and its arguments are hidden, and unknown scope is never usable as whole-suite evidence |
+| `npx jest -t login`, `npx vitest run --changed`, `npx jest --onlyChanged` | Marked scoped, per each runner's own narrowing flags |
 | A nonexistent `--cwd`, an unbalanced quote in `--command`, a malformed hook payload | All fail open with a specific reason. Every entry point also has a catch-all, so no internal error can block a commit |
 
 ## What this is not
