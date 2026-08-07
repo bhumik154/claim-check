@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claim-check"
-version = "0.3.1"
+version = "0.4.0"
 description = "Verify test-count claims in commit messages against real pytest output, as a pre-commit hook, a Claude Code hook, or a standalone CLI."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -42,3 +42,11 @@ packages = ["src/claim_check"]
 
 [dependency-groups]
 dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+# Resolve imports from the working tree, never from whatever copy happens to
+# be installed. Without this, a src-layout project silently tests site-packages
+# instead: a new module reads as ModuleNotFoundError while an edited one reads
+# as stale, and the TDD loop only appears to work because something else keeps
+# refreshing the install.
+pythonpath = ["src"]
