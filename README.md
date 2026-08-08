@@ -30,7 +30,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.4.0
+    rev: v0.5.0
     hooks:
       - id: claim-check
 ```
@@ -46,7 +46,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.4.0
+pip install git+https://github.com/bhumik154/claim-check@v0.5.0
 ```
 
 ```bash
@@ -79,15 +79,33 @@ If you'd rather not install a plugin, put this in `.claude/settings.json` (also 
 
 This needs `claim-check` on your `PATH`, so it does require installing the package.
 
-## Read this before you rely on it
+## Scope: what it can and cannot know
 
-**claim-check can only compare your claim against whatever pytest collects when *it* runs.** It has no idea what "the full suite" means to you.
+**claim-check compares your claim against whatever your runner collected when *it* ran.** A claim is about a scope; the tool sees one invocation. Those can differ.
 
-Say you write "all 150 tests pass" because you genuinely ran everything. If claim-check's own run is narrower, because a "test only changed files" setup handed it one file, or `testpaths` in your config scoped discovery to a subdirectory, or a sharded CI job ran one slice, it sees far fewer than 150 tests and flags your honest claim as wrong. That's reproducible, not hypothetical (see `test_scoping_pytest_args_to_one_file_produces_a_false_mismatch_against_a_full_suite_claim`).
+The awkward part is that they are indistinguishable from the numbers alone. "You wrote the wrong number" and "I ran a narrower scope" produce byte-identical output: a claim of 150 against a run collecting 40 looks the same either way. So scope cannot be recovered by arithmetic, and the tool does not try.
 
-The same problem runs the other way, and it's easier to miss. A `-k` filter doesn't just narrow what gets checked, it changes what "all tests pass" even means. Run `pytest -k test_a` on a file with a passing `test_a` and a failing `test_b` and you get `1 passed, 1 deselected`, which is a perfectly correct "all tests pass" for that scope while the real suite is red. Deselected tests are tracked separately and kept out of the total, which is the right behaviour, and it's also exactly what makes this spoofable.
+Instead it looks at the invocation it actually made. When the run was narrowed, by a `-k` or `-m` filter, an explicit path, `-x`, `--lf`, `--shard`, a vitest `-t`, a jest `--onlyChanged`, it says so and declines to judge rather than guessing:
 
-**So: run claim-check against the same scope your claim is about.** Check its `cwd`, any extra pytest args, and your project's own test-discovery config.
+```
+claim-check: WARNING - could not verify "All 22 tests pass": this run saw 1
+where the claim is about 22, and this run was narrowed by 'sub/', so it
+covered less than the whole suite
+```
+
+That cuts both ways, and the second direction matters more than it looks. A narrowed run cannot **confirm** a whole-suite claim either. `pytest -k test_a` on a file whose `test_b` fails reports `1 passed, 1 deselected`, so "all tests pass" is perfectly true of what ran while the suite is red. Confirming there would launder a false claim into a verified one, so it abstains.
+
+It also reads `deselected` straight out of pytest's own output, which catches filtering configured in `pytest.ini` rather than passed on the command line. That signal is pytest-only; vitest and jest never report it.
+
+**None of this weakens the ordinary case.** A run that was not narrowed is judged exactly as strictly as before, so "all 22 tests pass" against a real 21 is still caught.
+
+### What it still cannot see
+
+- **Directory-level narrowing.** A `--cwd` into one package of a monorepo covers less than the repo, but a hook legitimately passes a `cwd` on every run, so treating that as narrowing would abstain always. Undetected on purpose.
+- **`testpaths` and `--ignore` in your config**, when nothing is deselected. Those files are never collected, so there is no signal in the output at all.
+- **A bare "all tests pass" with no number**, combined with either of the above.
+
+If your setup hits these, run claim-check against the same scope your claim is about, and check its `cwd` and your project's own test-discovery config.
 
 ## Configuration
 
@@ -121,7 +139,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 340 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 370 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 One example, from the comparison core:
 
@@ -152,7 +170,7 @@ The cases worth knowing about:
 | The `git commit -m "$(cat <<'EOF' ... EOF)"` heredoc pattern | Extracted correctly end to end, and a wrong claim inside one is caught |
 | Unbalanced quotes, an unresolved `$VAR` in an unquoted heredoc, `git commit` inside an unrelated `echo` | All fail open or are ignored. A parse failure isn't evidence a claim is wrong |
 | `git -C <path> commit`, `git --no-pager commit` | Checked. git's own global options are skipped when finding the subcommand |
-| A full-suite claim against a deliberately scoped run | Pins the partial-run limitation described above. Expected, not a bug |
+| A full-suite claim against a deliberately scoped run | Abstains rather than judging, in both directions: a narrowed run can neither contradict nor confirm a claim about the whole suite |
 | A summary line printed by a test and replayed in the failure report | Can't forge the tally on its own. The last summary line *per session* wins, and a test's output always gets replayed before its own summary. See "What this is not" for the case that does get through |
 | A line like `"deploy finished in 1.2.3s"` in captured output | Not a summary line, and not a crash. The duration pattern is a strict number, not any run of digits and dots |
 | A 60,000-character separator line | Parsed in linear time. The old pattern backtracked quadratically and took 12 seconds inside the hook, which `--timeout` doesn't cover |
@@ -177,7 +195,7 @@ The cases worth knowing about:
 
 **It checks truthfulness, not whether your tests pass.** If you write "14/15 passing" and the suite really is 14 passed and 1 failed, that's accurate, so the commit goes through with a test failing. Most people assume a hook that runs pytest blocks red builds; this one only blocks claims that don't match reality. If you want red builds blocked, use a pre-push hook or CI alongside this, not instead of it.
 
-**It doesn't know what "the full suite" means to you**, only what pytest collects when it runs. See the warning above.
+**It still doesn't know what "the full suite" means to you.** It knows when its own run was narrowed and abstains there, but directory-level narrowing and `testpaths` restrictions leave no trace in the output, so those go unnoticed. See the scope section above.
 
 **It isn't NLP.** It can't resolve tense or discourse. "Was at 15 passed, now 22/22" is genuinely ambiguous to a regex. Only one claim per message gets checked: the most specific kind, then the last one among ties. That covers a stale count corrected later, but a later sentence describing an earlier state can still slip through.
 

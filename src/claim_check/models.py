@@ -53,11 +53,38 @@ class RunResult:
     at all, meaning pytest itself crashed before finishing."""
     parse_error: Optional[str]
     """Human-readable reason, populated iff counts is None."""
+    argv: tuple = ()
+    """The arguments actually appended to the runner invocation."""
+    cwd: str = ""
+    """The directory the runner actually ran in."""
+    command: Optional[str] = None
+    """The --command override actually used, or None for the default runner.
+
+    These three exist so a caller can tell afterwards what was really run.
+    Without them the result withholds information its own caller needs: the
+    commit path has to know whether its own invocation was narrowed before it
+    can fairly judge a claim about the whole suite."""
+
+
+@dataclass(frozen=True)
+class RunScope:
+    """What the run that produced these counts actually covered.
+
+    A claim is about a scope; the tool only sees what the runner collected
+    for the invocation it made. "You lied" and "I ran a narrower scope"
+    produce byte-identical counts, so scope cannot be recovered from the
+    numbers. It has to come from the invocation, which is what this carries.
+    """
+
+    narrowed: bool
+    """True only when narrowing was positively detected. Not "unknown"."""
+    reason: Optional[str] = None
+    """What narrowed it, for a message that teaches rather than accuses."""
 
 
 @dataclass(frozen=True)
 class Verdict:
-    status: Literal["no_claim", "match", "mismatch", "runner_error"]
+    status: Literal["no_claim", "match", "mismatch", "runner_error", "unverifiable"]
     message: str
     """Human-readable explanation, ready to print or return as a hook denial
     reason."""

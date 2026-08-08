@@ -18,6 +18,7 @@ from typing import Optional, Sequence
 from .._args import positive_timeout
 from ..claims import extract_claims
 from ..compare import compare_claims
+from ..evidence import scope_of_run
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
 
 RESULT_SUCCESS = 0
@@ -48,7 +49,7 @@ def _verify(args) -> int:
         return RESULT_SUCCESS
 
     run_result = run_pytest(args.cwd, timeout_s=args.timeout, command=args.command)
-    verdict = compare_claims(claims, run_result.counts)
+    verdict = compare_claims(claims, run_result.counts, scope=scope_of_run(run_result))
 
     if verdict.status == "mismatch":
         print(f"claim-check: {verdict.message}")
@@ -56,6 +57,9 @@ def _verify(args) -> int:
 
     if verdict.status == "runner_error":
         print(f"claim-check: WARNING - could not verify ({run_result.parse_error}); allowing commit")
+
+    if verdict.status == "unverifiable":
+        print(f"claim-check: WARNING - {verdict.message}; allowing commit")
 
     return RESULT_SUCCESS
 

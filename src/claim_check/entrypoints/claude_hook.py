@@ -24,6 +24,7 @@ from .._debug import dump_payload
 from .._payload import bash_command, resolve_cwd
 from ..claims import extract_claims
 from ..compare import compare_claims
+from ..evidence import scope_of_run
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
 from ..shell_parser import extract_commit_message
 
@@ -97,7 +98,7 @@ def _run(stdin_text: Optional[str], args) -> int:
         return 0
 
     run_result = run_pytest(resolve_cwd(payload), timeout_s=args.timeout, command=args.command)
-    verdict = compare_claims(claims, run_result.counts)
+    verdict = compare_claims(claims, run_result.counts, scope=scope_of_run(run_result))
 
     if verdict.status == "mismatch":
         print(_deny_json(verdict.message))
@@ -105,6 +106,12 @@ def _run(stdin_text: Optional[str], args) -> int:
 
     if verdict.status == "runner_error":
         print(f"claim-check: WARNING - could not verify ({run_result.parse_error}); allowing commit", file=sys.stderr)
+
+    if verdict.status == "unverifiable":
+        # The commit hook was invoked to gate, so "I did not gate" is
+        # information the user needs. stderr, because stdout is parsed
+        # as the hook's JSON response.
+        print(f"claim-check: WARNING - {verdict.message}; allowing commit", file=sys.stderr)
 
     # match, no_claim, or runner_error (fails open per the resolved crash
     # policy) all allow: no stdout JSON means Claude Code proceeds normally.

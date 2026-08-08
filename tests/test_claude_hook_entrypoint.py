@@ -258,3 +258,26 @@ def test_an_unwritable_debug_dump_target_never_breaks_the_hook(tmp_path, monkeyp
     monkeypatch.setenv("CLAIM_CHECK_DEBUG_DUMP", str(blocker / "nested"))
     raw = json.dumps({"tool_name": "Write", "tool_input": {}})
     assert claude_hook.main(stdin_text=raw, argv=[]) == 0
+
+
+def test_a_narrowed_run_warns_on_stderr_and_does_not_deny(monkeypatch, capsys):
+    # stdout is parsed as the hook's JSON response, so a plain-text warning
+    # belongs on stderr or it corrupts the protocol.
+    from claim_check.entrypoints import claude_hook
+    from claim_check.models import PytestCounts, RunResult
+
+    counts = PytestCounts(
+        passed=40, failed=0, skipped=0, xfailed=0, xpassed=0,
+        errors=0, warnings=0, deselected=0, duration_s=0.1, raw_summary_line="fixture",
+    )
+    monkeypatch.setattr(
+        claude_hook, "run_pytest",
+        lambda *a, **k: RunResult(0, "", "", counts, None, argv=("-k", "slow"), cwd=".", command=None),
+    )
+    payload = {"tool_name": "Bash", "cwd": ".",
+               "tool_input": {"command": 'git commit -m "All 150 tests pass"'}}
+    assert claude_hook.main(stdin_text=json.dumps(payload), argv=[]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "", "no deny JSON may be emitted"
+    assert "could not verify" in captured.err.lower()
