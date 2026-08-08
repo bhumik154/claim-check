@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .models import PytestCounts
+from .models import PytestCounts, RunScope
 from .runners import parse_test_output
 
 # Test results depend on state that mtimes cannot observe: environment
@@ -288,27 +288,90 @@ def _pytest_segments(tokens: Sequence[str]) -> list:
     return found
 
 
-def is_scoped(argv: Sequence[str]) -> bool:
+def is_scoped(argv: Sequence[str], unknown_runner_is_scoped: bool = True) -> bool:
     """True if this invocation ran less than the whole suite.
 
-    Biased towards True. Anything unrecognised, unparseable, or ambiguous is
-    reported as scoped, because scoped evidence is merely unusable while
-    wrongly-unscoped evidence can confirm a false whole-suite claim.
+    Biased towards True by default. Anything unrecognised, unparseable, or
+    ambiguous is reported as scoped, because scoped evidence is merely
+    unusable while wrongly-unscoped evidence can confirm a false whole-suite
+    claim.
+
+    `unknown_runner_is_scoped=False` inverts that one bias, and the
+    distinction is between commands the agent *typed* and commands the user
+    *declared*. For an observed command, an unrecognised runner really is
+    unknown scope, and abstaining costs a nice-to-have. For a declared one
+    it is not: `--command "hatch run test"` and `--command "make test"` are
+    both recommended in the README and contain no recognisable runner, so
+    keeping the default bias would give every hatch, poetry-script and make
+    user zero verification, forever, with no error to read. That is worse
+    than the false positive this whole mechanism exists to remove.
     """
     if not argv:
-        return True
+        return unknown_runner_is_scoped
 
     runner_segments = _pytest_segments(argv)
     if not runner_segments:
         # No recognisable runner. "npm test" or "make test" may well run
-        # everything, but nothing here can establish that, and unknown scope
-        # is never usable as whole-suite evidence.
-        return True
+        # everything, but nothing here can establish that.
+        return unknown_runner_is_scoped
 
     return any(_segment_is_scoped(name, segment) for name, segment in runner_segments)
 
 
+def scope_of_run(result) -> "RunScope":
+    """What a finished run actually covered, from its own invocation.
+
+    Lives here rather than beside the runner because it needs `is_scoped`,
+    and `runners.py` cannot import this module without a cycle.
+
+    The declared command and the extra arguments are inspected together: a
+    filter can live in either, and `--command` is the larger of the two
+    uninspected vectors since the README actively tells people to set it.
+
+    Deliberately does NOT treat a non-default `cwd` as narrowing. The
+    PreToolUse hook always passes a cwd, so that rule would mark every run
+    narrowed and abstain always. Directory-level narrowing therefore remains
+    undetected; see the README's scope section.
+    """
+    tokens = []
+    command = getattr(result, "command", None)
+    if isinstance(command, str) and command.strip():
+        try:
+            tokens.extend(shlex.split(command, posix=True))
+        except ValueError:
+            # An unparseable declared command tells us nothing either way.
+            # Guessing "narrowed" here would abstain on a typo.
+            return RunScope(narrowed=False)
+    else:
+        # No override means run_pytest used its default. The runner is
+        # implied rather than written down, and without naming it the extra
+        # arguments cannot be read under any runner's rules.
+        tokens.extend(["python", "-m", "pytest"])
+    tokens.extend(str(token) for token in (getattr(result, "argv", ()) or ()))
+
+    if not tokens:
+        return RunScope(narrowed=False)
+
+    causes = [
+        _segment_narrowing_cause(name, segment)
+        for name, segment in _pytest_segments(tokens)
+    ]
+    cause = next((c for c in causes if c), None)
+    if cause is None:
+        return RunScope(narrowed=False)
+
+    return RunScope(
+        narrowed=True,
+        reason=f"this run was narrowed by {cause!r}, so it covered less than the whole suite",
+    )
+
+
 def _segment_is_scoped(runner: str, tokens: list) -> bool:
+    return _segment_narrowing_cause(runner, tokens) is not None
+
+
+def _segment_narrowing_cause(runner: str, tokens: list):
+    """The token that narrowed this run, or None if nothing did."""
     _matches, narrowing, value_taking, bare_allowed = _RUNNERS[runner]
     tokens = list(tokens)
 
@@ -329,15 +392,15 @@ def _segment_is_scoped(runner: str, tokens: list) -> bool:
         token = tokens[index]
 
         if token in narrowing:
-            return True
+            return token
         if token.startswith("--") and "=" in token and token.split("=", 1)[0] in narrowing:
-            return True
+            return token
         if runner == "pytest":
             # Bundled short flags such as "-xvs" carry -x inside them. Only
             # pytest bundles them this way in practice.
             if token.startswith("-") and not token.startswith("--") and len(token) > 1:
                 if "x" in token[1:] and not token.startswith("-x="):
-                    return True
+                    return token
 
         if token in value_taking:
             index += 2
@@ -350,10 +413,10 @@ def _segment_is_scoped(runner: str, tokens: list) -> bool:
         # anything else is a path, a node id or a test-name filter, all of
         # which narrow what runs.
         if token not in bare_allowed and not _RUNNERS[runner][0](token):
-            return True
+            return token
         index += 1
 
-    return False
+    return None
 
 
 def record_run(

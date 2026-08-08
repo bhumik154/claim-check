@@ -84,21 +84,24 @@ def test_main_verify_tests_subcommand_end_to_end(tmp_path):
     assert code == 0
 
 
-def test_scoping_pytest_args_to_one_file_produces_a_false_mismatch_against_a_full_suite_claim():
-    # Documents a known, real limitation (not a bug to fix - there is no
-    # general fix): claim-check can only ever compare against whatever
-    # pytest actually collects for *this* invocation. A developer who
-    # genuinely ran the full suite and honestly saw "150 passed" will be
-    # falsely flagged if the tool itself (via --cwd/pytest_args, a scoped
-    # pre-commit "only changed files" setup, a pytest.ini testpaths
-    # restriction, or a sharded CI job) only sees a subset. See the
-    # README's Usage warning: always invoke this against the same scope
-    # the claim actually refers to.
+def test_scoping_pytest_args_to_one_file_abstains_instead_of_falsely_flagging(capsys):
+    # This used to assert code == 1, and documented that as a permanent
+    # limitation: a developer who genuinely ran the full suite and honestly
+    # saw "150 passed" was flagged whenever claim-check's own run was
+    # narrower. That was the single likeliest reason to uninstall this.
+    #
+    # It is no longer permanent. The run now reports the arguments it
+    # actually used, so a run narrowed to one file is recognised as covering
+    # less than the claim is about, and a contradiction that scope can
+    # explain is not evidence the claim is wrong.
     code = verify_tests(
         "All 150 tests pass",
         pytest_args=["tests/test_compare.py"],  # deliberately narrower than the claim
     )
-    assert code == 1
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "could not verify" in out.lower()
+    assert "150" in out
 
 
 def test_command_flag_reaches_a_real_subprocess_invocation(tmp_path, capsys):
@@ -169,19 +172,16 @@ def test_cwd_flag_after_the_positional_message_is_actually_respected(tmp_path, c
     assert "WARNING" not in out
 
 
-def test_k_flag_deselection_produces_a_false_match_against_an_all_pass_claim(tmp_path):
-    # Same limitation as the file-scoping test above, via a different
-    # mechanism: pytest_parser correctly tracks "deselected" separately
-    # from "total" (that part is right - deselected tests didn't run, so
-    # they can't count as passed or failed). But that means a real -k
-    # filter can make "all tests pass" true for the scope claim-check
-    # actually sees, even while a real failing test exists just outside
-    # that filter. Confirmed directly: a two-test file with test_a (pass)
-    # and test_b (fail), run with `-k test_a`, produces "1 passed, 1
-    # deselected", and an "all tests pass" claim against that is a
-    # legitimate match for the scope that was actually run - not a bug in
-    # the comparison logic, but exactly the scoping risk documented in the
-    # README's Usage warning.
+def test_k_flag_deselection_abstains_rather_than_confirming_an_all_pass_claim(tmp_path, capsys):
+    # This used to pass for the wrong reason. A -k filter makes "all tests
+    # pass" genuinely true for the scope that ran, while a real failure sits
+    # just outside the filter, so the tool returned 0 by *agreeing* with a
+    # claim a full run would have contradicted.
+    #
+    # It still returns 0, because abstaining and agreeing look identical
+    # from an exit code. The difference is the reason, so assert the reason:
+    # the run is now recognised as filtered, and a filtered run is not
+    # allowed to confirm a claim about the whole suite.
     (tmp_path / "test_x.py").write_text(
         "def test_a():\n    assert True\n\ndef test_b():\n    assert False\n",
         encoding="utf-8",
@@ -197,6 +197,9 @@ def test_k_flag_deselection_produces_a_false_match_against_an_all_pass_claim(tmp
         ]
     )
     assert code == 0
+    out = capsys.readouterr().out
+    assert "OK -" not in out, "a filtered run must not confirm a whole-suite claim"
+    assert "could not verify" in out.lower()
 
 
 def test_timeout_flag_reaches_run_pytest_and_kills_a_hanging_command(tmp_path, capsys):
