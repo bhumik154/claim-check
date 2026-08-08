@@ -234,9 +234,11 @@ matter most for the plugin:
   that.
 - **It cannot know what "the full suite" means to you.** It compares your
   claim against whatever pytest collects for its own invocation, in its own
-  directory. If your claim is about a broader scope than the hook's run, it
-  will report a mismatch on an honest claim. Read
-  [Read this before you rely on it](README.md#read-this-before-you-rely-on-it)
+  directory. It now recognises when that invocation was narrowed by a filter,
+  a path, or a `--command` carrying one, and abstains with a warning instead
+  of flagging an honest claim. What it still cannot see is narrowing that
+  leaves no trace: a `cwd` into one package of a monorepo, or `testpaths` in
+  your config. Read [Scope: what it can and cannot know](README.md#scope-what-it-can-and-cannot-know)
   before installing.
 
 ## Troubleshooting

@@ -9,6 +9,7 @@ from typing import Optional, Sequence
 from ._args import positive_timeout
 from .claims import extract_claims
 from .compare import compare_claims
+from .evidence import scope_of_run
 from .runner import DEFAULT_TIMEOUT_S, result_from_captured_output, run_pytest
 
 
@@ -70,16 +71,23 @@ def _verify_tests(
     else:
         run_result = run_pytest(cwd, pytest_args, timeout_s=timeout_s, command=command)
 
-    verdict = compare_claims(claims, run_result.counts)
+    verdict = compare_claims(claims, run_result.counts, scope=scope_of_run(run_result))
+
+    # Blocking is an allowlist of exactly one status, not a fall-through.
+    # Written the other way round, any status added later would silently
+    # become a blocking mismatch - which for a status meaning "I could not
+    # tell" is precisely the false positive this tool exists to avoid.
+    if verdict.status == "mismatch":
+        print(f"claim-check: MISMATCH - {verdict.message}")
+        return 1
 
     if verdict.status == "match":
         print(f"claim-check: OK - {verdict.message}")
-        return 0
-    if verdict.status == "runner_error":
+    elif verdict.status == "runner_error":
         print(f"claim-check: WARNING - could not verify ({run_result.parse_error}); allowing commit")
-        return 0
-    print(f"claim-check: MISMATCH - {verdict.message}")
-    return 1
+    else:
+        print(f"claim-check: WARNING - {verdict.message}")
+    return 0
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

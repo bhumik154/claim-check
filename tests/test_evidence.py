@@ -263,3 +263,78 @@ def test_a_js_run_behind_an_npm_script_is_marked_scoped(project):
     # "npm test" hides which runner ran and with what arguments.
     record = evidence.record_run(project, "s1", "npm test", VITEST_OUTPUT)
     assert record["scoped"] is True
+
+
+# --- declared commands need the opposite bias to observed ones ----------------
+# is_scoped treats an unrecognised runner as scoped. That is right for a
+# command the agent *typed* - abstaining there costs a nice-to-have. It is
+# catastrophic for one the user *declared*: --command "hatch run test" and
+# --command "make test" are both recommended in the README and contain no
+# recognisable runner, so the observed bias would give every hatch, poetry
+# and make user zero verification, forever, with no error to read.
+
+def test_an_unrecognised_runner_is_scoped_by_default():
+    import shlex
+
+    assert evidence.is_scoped(shlex.split("make test")) is True
+
+
+def test_a_declared_command_abstains_only_on_detected_narrowing():
+    import shlex
+
+    for command in ("make test", "hatch run test", "npm run ci", "./scripts/test.sh"):
+        assert evidence.is_scoped(
+            shlex.split(command), unknown_runner_is_scoped=False
+        ) is False, command
+
+
+def test_a_declared_command_with_a_real_filter_is_still_scoped():
+    import shlex
+
+    for command in ("pytest -k slow", "npx jest -t login", "poetry run pytest tests/unit"):
+        assert evidence.is_scoped(
+            shlex.split(command), unknown_runner_is_scoped=False
+        ) is True, command
+
+
+# --- turning a finished run into a scope descriptor --------------------------
+
+def test_scope_of_an_ordinary_run_is_unrestricted():
+    from claim_check.models import RunResult
+
+    result = RunResult(0, "", "", None, None, argv=(), cwd=".", command=None)
+    assert evidence.scope_of_run(result).narrowed is False
+
+
+def test_scope_of_a_filtered_run_is_narrowed_and_says_why():
+    from claim_check.models import RunResult
+
+    result = RunResult(0, "", "", None, None, argv=("-k", "slow"), cwd=".", command=None)
+    scope = evidence.scope_of_run(result)
+    assert scope.narrowed is True
+    assert scope.reason and "-k" in scope.reason
+
+
+def test_a_wrapper_command_does_not_make_a_run_narrowed():
+    # The regression that would silently disable the tool for every hatch or
+    # make user.
+    from claim_check.models import RunResult
+
+    for command in ("hatch run test", "make test", "poetry run pytest"):
+        result = RunResult(0, "", "", None, None, argv=(), cwd=".", command=command)
+        assert evidence.scope_of_run(result).narrowed is False, command
+
+
+def test_a_filter_inside_the_declared_command_is_detected():
+    from claim_check.models import RunResult
+
+    result = RunResult(0, "", "", None, None, argv=(), cwd=".", command="pytest -k slow")
+    assert evidence.scope_of_run(result).narrowed is True
+
+
+def test_the_command_and_the_extra_args_are_inspected_together():
+    # --command is the larger uninspected vector; a filter can live in either.
+    from claim_check.models import RunResult
+
+    result = RunResult(0, "", "", None, None, argv=("tests/unit",), cwd=".", command="poetry run pytest")
+    assert evidence.scope_of_run(result).narrowed is True

@@ -6,7 +6,9 @@ reviewed as a single unit rather than scattered across three entry points.
 
 from typing import Optional
 
-from .models import Claim, RunResult, PytestCounts, Verdict
+from .models import Claim, RunResult, PytestCounts, RunScope, Verdict
+
+_UNRESTRICTED = RunScope(narrowed=False)
 
 # Long enough for any legitimate claim ("all 12345 tests passing" is 24), short
 # enough that nothing interesting fits in the remainder.
@@ -44,7 +46,17 @@ def evaluate(message: str, run_result: RunResult) -> Verdict:
     return compare_claims(claims, run_result.counts)
 
 
-def compare_claims(claims: list[Claim], counts: Optional[PytestCounts]) -> Verdict:
+def compare_claims(
+    claims: list[Claim],
+    counts: Optional[PytestCounts],
+    scope: Optional[RunScope] = None,
+) -> Verdict:
+    """Judge claims against counts, given what the run actually covered.
+
+    `scope=None` means the caller asserts nothing was narrowed. That keeps
+    existing callers on today's behaviour rather than silently turning their
+    verdicts into abstentions.
+    """
     if not claims:
         # No test-count claim was made at all. Never flags, regardless of
         # the actual test outcome - this is the one non-negotiable rule.
@@ -66,12 +78,123 @@ def compare_claims(claims: list[Claim], counts: Optional[PytestCounts]) -> Verdi
             counts=None,
         )
 
-    problems = [detail for claim in claims if (detail := _mismatch_reason(claim, counts)) is not None]
+    scope = scope if scope is not None else _UNRESTRICTED
+
+    problems = []
+    abstentions = []
+    for claim in claims:
+        reason = _mismatch_reason(claim, counts)
+        if reason is None:
+            continue
+        excuse = _scope_excuse(claim, counts, scope)
+        if excuse is None:
+            problems.append(reason)
+        else:
+            abstentions.append(excuse)
 
     if problems:
+        # A contradiction the scope cannot explain outranks one it can.
         return Verdict(status="mismatch", message="; ".join(problems), claims=claims, counts=counts)
 
+    if abstentions:
+        return Verdict(status="unverifiable", message="; ".join(abstentions), claims=claims, counts=counts)
+
+    # Agreement needs the same guard as contradiction. A narrowed run can
+    # satisfy a whole-suite claim without that meaning anything: `pytest -k
+    # test_a` on a file whose test_b fails reports "1 passed, 1 deselected",
+    # and "all tests pass" is perfectly true of what ran while the suite is
+    # red. Confirming there would be worse than staying quiet, because it
+    # launders a false claim into a verified one.
+    unconfirmable = [
+        detail
+        for claim in claims
+        if (detail := _scope_blocks_confirmation(claim, counts, scope)) is not None
+    ]
+    if unconfirmable:
+        return Verdict(status="unverifiable", message="; ".join(unconfirmable), claims=claims, counts=counts)
+
     return Verdict(status="match", message="All test-count claims match the actual results.", claims=claims, counts=counts)
+
+
+def _scope_blocks_confirmation(claim: Claim, counts: PytestCounts, scope: RunScope) -> Optional[str]:
+    """Why agreeing with this claim would not actually verify it.
+
+    Only for claims quantified over the suite. "22 passed" reports an
+    observation, and a narrowed run that saw 22 pass really did see 22 pass,
+    so that number is confirmed whatever else was left out. "All tests pass"
+    and "22/22" assert something about the suite itself, which a run covering
+    part of it cannot establish.
+    """
+    if claim.kind == "n_passed":
+        return None
+
+    if scope.narrowed:
+        cause = scope.reason or "this run covered less than the whole suite"
+        return (
+            f'could not verify "{_rendered(claim.raw_text)}": it agrees with what ran, '
+            f"but {cause}"
+        )
+
+    if counts.deselected:
+        return (
+            f'could not verify "{_rendered(claim.raw_text)}": it agrees with what ran, '
+            f"but {counts.deselected} test(s) were deselected by a filter this run did "
+            "not set, so the suite is larger than what ran"
+        )
+
+    return None
+
+
+def _scope_excuse(claim: Claim, counts: PytestCounts, scope: RunScope) -> Optional[str]:
+    """Why this contradiction might be the run's scope rather than the claim.
+
+    Returns None when the scope cannot account for it, in which case the
+    contradiction stands.
+
+    Only *count* comparisons are scope-sensitive. A failure observed inside a
+    subset is still a failure, an error still leaves the denominator unknown,
+    and a run that collected nothing still cannot make "all tests pass" true.
+    Narrowing excuses none of those, so they are never reached from here.
+    """
+    if counts.failed or counts.errors or counts.total == 0:
+        return None
+
+    claimed = claim.claimed_total if claim.claimed_total is not None else claim.claimed_passed
+    if claimed is None:
+        # A bare "all tests pass" states no number, so there is no shortfall
+        # to attribute to scope.
+        return None
+
+    observed = counts.passed if claim.kind == "n_passed" else counts.total
+    if observed >= claimed:
+        # A narrower run cannot explain seeing MORE than was claimed, so
+        # scope buys no excuse in that direction.
+        return None
+
+    if scope.narrowed:
+        cause = scope.reason or "this run covered less than the whole suite"
+        return (
+            f'could not verify "{_rendered(claim.raw_text)}": this run saw {observed} '
+            f"where the claim is about {claimed}, and {cause}"
+        )
+
+    if counts.deselected and claim.kind != "n_passed":
+        # deselected > 0 is proof from the output itself that a filter ran,
+        # which is the one signal that catches filtering configured in
+        # pytest.ini rather than passed on the command line. Restricted to
+        # claims that state a suite size: a bare "N passed" reports an
+        # observation rather than asserting how big the suite is, so a filter
+        # elsewhere does not make that number unknowable.
+        #
+        # pytest only. vitest and jest never report deselected.
+        return (
+            f'could not verify "{_rendered(claim.raw_text)}": this run saw {observed} '
+            f"where the claim is about {claimed}, and {counts.deselected} test(s) were "
+            "deselected by a filter this run did not set, so the suite is larger than "
+            "what ran. Run without the filter, or state the scope the claim is about"
+        )
+
+    return None
 
 
 def _mismatch_reason(claim: Claim, counts: PytestCounts) -> Optional[str]:

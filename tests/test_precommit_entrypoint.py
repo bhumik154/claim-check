@@ -163,3 +163,60 @@ def test_non_positive_timeout_is_rejected_loudly(tmp_path):
     with pytest.raises(SystemExit) as excinfo:
         precommit.main([str(msg), "--timeout", "0"])
     assert excinfo.value.code == 2
+
+
+def _narrowed_run(passed):
+    from claim_check.models import PytestCounts, RunResult
+
+    counts = PytestCounts(
+        passed=passed, failed=0, skipped=0, xfailed=0, xpassed=0,
+        errors=0, warnings=0, deselected=0, duration_s=0.1, raw_summary_line="fixture",
+    )
+    return RunResult(0, "", "", counts, None, argv=("-k", "slow"), cwd=".", command=None)
+
+
+def test_a_narrowed_run_warns_and_allows_instead_of_blocking(tmp_path, monkeypatch, capsys):
+    # The uninstall risk, at the entry point. An honest claim against a run
+    # that covered less than the claim is about must not abort the commit.
+    from claim_check.entrypoints import precommit
+
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text("All 150 tests pass", encoding="utf-8")
+    monkeypatch.setattr(precommit, "run_pytest", lambda *a, **k: _narrowed_run(40))
+
+    assert precommit.main([str(msg)]) == 0
+    out = capsys.readouterr().out
+    assert "could not verify" in out.lower()
+    assert "150" in out and "40" in out
+
+
+def test_the_commit_path_speaks_when_it_does_not_gate(tmp_path, monkeypatch, capsys):
+    # This hook was invoked to gate, so "I did not gate" is information the
+    # user needs. Silence here would be the tool verifying nothing while
+    # looking like it worked.
+    from claim_check.entrypoints import precommit
+
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text("All 150 tests pass", encoding="utf-8")
+    monkeypatch.setattr(precommit, "run_pytest", lambda *a, **k: _narrowed_run(40))
+    precommit.main([str(msg)])
+    assert capsys.readouterr().out.strip() != ""
+
+
+def test_an_unrestricted_run_still_blocks_a_wrong_count(tmp_path, monkeypatch):
+    # The regression that matters most: abstention must not leak into the
+    # ordinary case.
+    from claim_check.entrypoints import precommit
+    from claim_check.models import PytestCounts, RunResult
+
+    counts = PytestCounts(
+        passed=21, failed=0, skipped=0, xfailed=0, xpassed=0,
+        errors=0, warnings=0, deselected=0, duration_s=0.1, raw_summary_line="fixture",
+    )
+    msg = tmp_path / "COMMIT_EDITMSG"
+    msg.write_text("All 22 tests pass", encoding="utf-8")
+    monkeypatch.setattr(
+        precommit, "run_pytest",
+        lambda *a, **k: RunResult(0, "", "", counts, None, argv=(), cwd=".", command=None),
+    )
+    assert precommit.main([str(msg)]) == 1
