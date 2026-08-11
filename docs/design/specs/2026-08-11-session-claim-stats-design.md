@@ -202,11 +202,36 @@ exit code, and never surface as an error. This is the existing fail open
 discipline applied one level down: uncertainty about the statistics is not
 evidence about the claim.
 
-**Size cap at 64MB.** Extrapolating the measured rate that is roughly 260ms.
-Past the cap `summarize_session` returns `None` rather than a partial count,
-because a truncated replay would silently under count and produce a
-confidently wrong ratio, which is the exact failure mode this approach was
-chosen to avoid.
+**A deadline, not a size cap.** An earlier draft capped the replay at 64MB.
+That was guarding a time budget with a size measurement, which is why it bit
+early and arbitrarily: agentic sessions grow fast, the largest transcript on
+this machine is already 20.8MB, and a size cap turns the feature off exactly
+in the long complex sessions where unverified claims are most likely.
+
+Measured cost is linear and there is a lot of headroom:
+
+```
+  64MB   204ms
+ 256MB   814ms
+   1GB  3257ms      against the Stop hook's 10s budget
+```
+
+So `summarize_session` takes a wall clock budget, default 2 seconds, and
+abandons the replay if it is exceeded. A 500MB transcript finishes
+comfortably. In practice the feature should never switch off, and when it
+does it is because it genuinely threatened the hook rather than because a
+file crossed a number someone guessed.
+
+On abandonment it returns `None` rather than a partial count. A truncated
+replay would silently under count and produce a confidently wrong ratio,
+which is the exact failure mode this approach was chosen to avoid.
+
+**A rejected optimisation, recorded so it is not retried.** Prefiltering
+lines at the byte level before `json.loads` looked like it should make the
+replay cheap enough that no limit was needed. Measured on the 20.8MB
+transcript it skipped 45% of lines for a 1.1x speedup, because the skipped
+lines are the short ones and cost is dominated by the large records that
+have to be parsed anyway. Not worth the complexity.
 
 ## Testing
 
@@ -259,10 +284,52 @@ directly rather than left to the existing suite.
 - **A threshold that stays quiet until things look bad.** A silent tool that
   has stopped working is indistinguishable from one that has nothing to say,
   which is the problem being fixed, not a solution to it.
-- **Retuning the 15 minute TTL.** 26 of 61 silences are stale evidence, which
-  is real signal that the TTL may be mistuned, but that is a change to how long
-  evidence stays usable and belongs in its own piece of work with its own
-  measurement.
+- **Retuning the 15 minute TTL.** Deferred, not dismissed. See the section
+  below, which measures it.
+
+## The TTL, and why this ships first anyway
+
+26 of 61 silences are stale evidence, which is 43% of the problem this feature
+reports on. Reporting staleness treats a symptom. The measurement:
+
+```
+       TTL    backed   % of claims
+      5min        50           43%
+     15min        56           48%     <- today
+        1h        64           55%
+       24h        76           65%
+ unlimited        82           70%
+
+gap from claim to last whole-suite run:
+  p50=64s   p75=46min   p90=11h   p95=24h   max=7.6 days
+```
+
+Half of all claims land within 64 seconds of a whole-suite run, then the tail
+explodes. There is no knee. Every candidate TTL is arbitrary, which suggests
+the parameter is the wrong shape rather than the wrong value.
+
+**The likely resolution is that the fingerprint subsumes the TTL.** Evidence
+goes stale when the tree changes, and `load_fresh` already computes a
+fingerprint over the source tree and rejects records that do not match. On an
+unchanged tree a 6 hour old run is exactly as valid as a 6 second old one. The
+clock is a weaker second guard standing in front of a stronger first one. The
+TTL should become a long backstop against what fingerprinting cannot see,
+upgraded dependencies, changed environment, external services, rather than the
+primary gate.
+
+That is not provable from the corpus: transcripts do not record fingerprints,
+so how many of the 26 would survive a fingerprint check is unknown from here.
+It needs its own measurement and its own piece of work.
+
+**Consequence for this work, and it constrains the implementation.** When the
+TTL changes, the cause mix shifts and "stale" may largely disappear. So:
+
+- No test may hard code the expected distribution of causes. Tests assert that
+  a session with a stale run reports the stale cause, never that stale is
+  common.
+- The rendered wording must read correctly whichever cause dominates. No
+  phrasing that assumes staleness is the usual case.
+- The numbers in this document are a dated snapshot and are labelled as such.
 
 ## Risks
 
