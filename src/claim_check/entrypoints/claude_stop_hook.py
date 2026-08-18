@@ -26,7 +26,6 @@ overwhelmingly the common one.
 """
 
 import json
-import os
 import sys
 from typing import Optional, Sequence
 
@@ -35,6 +34,7 @@ from .._payload import resolve_cwd, session_id
 from ..compare import compare_claims
 from ..conversation import extract_claims
 from ..evidence import counts_from_record, load_fresh
+from ..session_stats import summarize_session
 from ..transcript import last_assistant_text
 
 # Appended to every finding. The one outcome this must never encourage is an
@@ -49,6 +49,25 @@ CORRECTION_INSTRUCTION = (
 
 def _note(message: str) -> str:
     return json.dumps({"systemMessage": message})
+
+
+def _cause_sentence(record) -> str:
+    if record is None:
+        return "No whole-suite test run was recorded in this session against the current state of the tree."
+    return "The only test run recorded in this session was narrowed, so it covered less than the whole suite."
+
+
+def _ratio_suffix(payload: dict) -> str:
+    """The session ratio in parentheses, or "" if it cannot be computed.
+
+    The ratio is a garnish and the warning is the meal: a failure to compute
+    statistics must never suppress the warning itself.
+    """
+    stats = summarize_session(payload.get("transcript_path"))
+    if stats is None:
+        return ""
+    rendered = stats.render()
+    return f" {rendered}" if rendered else ""
 
 
 def _run(stdin_text: Optional[str]) -> int:
@@ -92,14 +111,13 @@ def _run(stdin_text: Optional[str]) -> int:
     record = load_fresh(resolve_cwd(payload), session_id(payload))
 
     if record is None or record.get("scoped") is True:
-        # No usable evidence. Unknown is never reported as wrong; the note
-        # exists only for someone who has opted into seeing it.
-        if os.environ.get("CLAIM_CHECK_VERBOSE"):
-            print(_note(
-                f'claim-check: could not verify "{claim.raw_text}". No whole-suite '
-                "test run was recorded in this session against the current state "
-                "of the tree."
-            ))
+        # No usable evidence. Reported, never as a finding of falsehood: the
+        # claim may be perfectly true and simply unchecked. The cause leads,
+        # because the cause is the part the reader can act on.
+        print(_note(
+            f'claim-check: could not verify "{claim.raw_text}". '
+            f"{_cause_sentence(record)}{_ratio_suffix(payload)}"
+        ))
         return 0
 
     counts = counts_from_record(record)

@@ -12,7 +12,9 @@ A finding is emitted only when ALL of these hold:
   - that run was NOT scope-narrowing
   - that run reported no errors
   - the claim contradicts it
-Everything else is silence.
+When evidence is missing, scoped, stale, or errored, the claim is instead
+reported as unverified rather than as a finding. Only a turn with no claim at
+all, or a true claim, produces no output.
 """
 
 import contextlib
@@ -120,35 +122,42 @@ def test_stop_hook_active_short_circuits_before_anything_else(project, tmp_path)
     assert out == ""
 
 
-def test_no_evidence_means_silence_not_a_finding(project, tmp_path):
+def test_no_evidence_means_a_could_not_verify_report_not_a_finding(project, tmp_path):
     # Unknown is never treated as wrong. This is the same asymmetry the
-    # evidence store is built around.
+    # evidence store is built around. But unknown is no longer silent either:
+    # it is reported as unverified, distinct from a mismatch finding.
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
+    assert "22 passed" in message
 
 
-def test_scoped_evidence_cannot_produce_a_finding(project, tmp_path):
+def test_scoped_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
     # `pytest -k thing` reports a true tally for a subset. Using it to
-    # contradict a claim about the whole suite would be a false accusation.
+    # contradict a claim about the whole suite would be a false accusation,
+    # but the claim is still reported as unverified.
     code, out = _run(project, tmp_path, "All done. 22 passed.", command="pytest -k thing")
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
 
 
-def test_evidence_from_another_session_cannot_produce_a_finding(project, tmp_path):
+def test_evidence_from_another_session_produces_a_could_not_verify_report(project, tmp_path):
     evidence.record_run(project, "other-session", "python -m pytest", WHOLE_SUITE_OUTPUT)
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
 
 
-def test_stale_evidence_cannot_produce_a_finding(project, tmp_path):
+def test_stale_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
     evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
     (project / "test_new.py").write_text("def test_n():\n    assert True\n", encoding="utf-8")
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
 
 
 def test_a_run_reporting_errors_cannot_produce_a_finding(project, tmp_path):
@@ -178,11 +187,9 @@ def test_no_finding_ever_tells_the_agent_to_change_tests_or_source():
         assert phrase not in lowered or "do not" in lowered
 
 
-def test_unverifiable_claims_are_reported_only_when_verbose_is_set(project, tmp_path, monkeypatch):
-    # Silence on the common path is what keeps this installable. Around half
-    # of claims have no usable evidence, so reporting each one would be a
-    # steady stream of notes the user can do nothing about.
-    monkeypatch.setenv("CLAIM_CHECK_VERBOSE", "1")
+def test_unverifiable_claims_are_reported(project, tmp_path):
+    # About half of claims have no usable evidence. Those are reported too,
+    # distinct from a mismatch finding, so silence never means "unchecked".
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
     assert "could not verify" in _message_of(out).lower()
@@ -233,3 +240,73 @@ def test_the_hook_never_runs_pytest(project, tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     code, _ = _run(project, tmp_path, "All done. 22 passed.")
     assert code == 0
+
+
+def test_unverified_claim_is_reported_with_cause_and_ratio(tmp_path, capsys):
+    from claim_check.entrypoints.claude_stop_hook import main
+
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
+        "message": {"content": [{"type": "text", "text": "All tests pass."}]},
+    }) + "\n", encoding="utf-8")
+
+    payload = json.dumps({
+        "hook_event_name": "Stop",
+        "transcript_path": str(transcript),
+        "cwd": str(tmp_path),
+        "session_id": "s1",
+    })
+    assert main(stdin_text=payload) == 0
+    out = json.loads(capsys.readouterr().out)["systemMessage"]
+    assert "could not verify" in out.lower()
+    assert "no test run" in out.lower()
+    assert "0 of 1 claims" in out
+
+
+def test_unverified_claim_still_reports_when_stats_are_unavailable(tmp_path, capsys, monkeypatch):
+    from claim_check.entrypoints import claude_stop_hook
+
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
+        "message": {"content": [{"type": "text", "text": "All tests pass."}]},
+    }) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(claude_stop_hook, "summarize_session", lambda *a, **k: None)
+
+    payload = json.dumps({
+        "hook_event_name": "Stop", "transcript_path": str(transcript),
+        "cwd": str(tmp_path), "session_id": "s1",
+    })
+    assert claude_stop_hook.main(stdin_text=payload) == 0
+    out = json.loads(capsys.readouterr().out)["systemMessage"]
+    assert "could not verify" in out.lower()
+    assert "this session:" not in out
+
+
+def test_a_turn_with_no_claim_still_produces_no_output_at_all(tmp_path, capsys):
+    # The non-negotiable rule. Holds even though this session's ratio would
+    # be terrible, because the claim gate runs before anything else.
+    from claim_check.entrypoints.claude_stop_hook import main
+
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("\n".join(json.dumps(r) for r in [
+        {"type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
+         "message": {"content": [{"type": "text", "text": "All tests pass."}]}},
+        {"type": "assistant", "timestamp": "2026-08-11T05:01:00.000Z",
+         "message": {"content": [{"type": "text", "text": "Renamed a variable."}]}},
+    ]) + "\n", encoding="utf-8")
+
+    payload = json.dumps({
+        "hook_event_name": "Stop", "transcript_path": str(transcript),
+        "cwd": str(tmp_path), "session_id": "s1",
+    })
+    assert main(stdin_text=payload) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_claim_check_verbose_is_gone(tmp_path):
+    import inspect
+    from claim_check.entrypoints import claude_stop_hook
+    assert "CLAIM_CHECK_VERBOSE" not in inspect.getsource(claude_stop_hook)
