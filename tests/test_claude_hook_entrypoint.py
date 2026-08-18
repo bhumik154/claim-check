@@ -281,3 +281,83 @@ def test_a_narrowed_run_warns_on_stderr_and_does_not_deny(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out.strip() == "", "no deny JSON may be emitted"
     assert "could not verify" in captured.err.lower()
+
+
+def test_abstention_warning_carries_the_session_ratio(tmp_path, capsys):
+    from claim_check.entrypoints.claude_hook import main
+
+    # The brief's own repro (a plain two-test file, claim "All 99 tests
+    # pass", commit restricted to one path via "git commit -- test_x.py")
+    # does not actually reach the "unverifiable" verdict: claude_hook.py
+    # runs an unscoped "python -m pytest" that is blind to the commit's
+    # pathspec, so the claim (99) vs. the actual total (2) is a plain
+    # "mismatch" - denied via stdout JSON, with nothing printed to stderr.
+    # Confirmed directly against compare.py: a contradiction is only
+    # excused into "unverifiable" when the *pytest run itself* was
+    # narrowed (scope.narrowed, or counts.deselected > 0), neither of
+    # which a restrictive commit pathspec produces on its own.
+    #
+    # This fixture instead narrows the run through pytest.ini's addopts
+    # (a marker filter the invoked command line never mentions), which is
+    # invisible to scope_of_run's argv inspection and so reports
+    # deselected > 0 without scope.narrowed - a real "unverifiable" case.
+    (tmp_path / "pytest.ini").write_text(
+        '[pytest]\naddopts = -m "not slow"\nmarkers =\n    slow: slow test\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "test_x.py").write_text(
+        "import pytest\n\n"
+        "def test_a():\n    assert True\n\n"
+        "def test_b():\n    assert True\n\n"
+        "@pytest.mark.slow\n"
+        "def test_c():\n    assert True\n",
+        encoding="utf-8",
+    )
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
+        "message": {"content": [{"type": "text", "text": "All 99 tests pass."}]},
+    }) + "\n", encoding="utf-8")
+
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": 'git commit -m "All 99 tests pass" -- test_x.py'},
+        "cwd": str(tmp_path),
+        "transcript_path": str(transcript),
+        "session_id": "s1",
+    })
+    assert main(stdin_text=payload, argv=[]) == 0
+    err = capsys.readouterr().err
+    assert "could not verify" in err.lower()
+    assert "this session:" in err
+
+
+def test_missing_transcript_path_still_warns_without_a_ratio(tmp_path, capsys):
+    from claim_check.entrypoints.claude_hook import main
+
+    # Same "unverifiable" repro as above (see the comment there for why a
+    # plain mismatch does not exercise this path); this variant omits
+    # transcript_path to confirm the warning still prints without a ratio.
+    (tmp_path / "pytest.ini").write_text(
+        '[pytest]\naddopts = -m "not slow"\nmarkers =\n    slow: slow test\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "test_x.py").write_text(
+        "import pytest\n\n"
+        "def test_a():\n    assert True\n\n"
+        "@pytest.mark.slow\n"
+        "def test_c():\n    assert True\n",
+        encoding="utf-8",
+    )
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": 'git commit -m "All 99 tests pass" -- test_x.py'},
+        "cwd": str(tmp_path),
+        "session_id": "s1",
+    })
+    assert main(stdin_text=payload, argv=[]) == 0
+    err = capsys.readouterr().err
+    assert "could not verify" in err.lower()
+    assert "this session:" not in err
