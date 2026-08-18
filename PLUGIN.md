@@ -176,8 +176,10 @@ The bar for saying anything is deliberately high. All of these must hold:
 - that run reported no errors
 - and the claim actually contradicts it
 
-Anything else is silence. Measured across 43 real sessions, claims appear on
-1.8% of turns, so the quiet path is nearly all of them.
+Anything else stays quiet: a turn that makes no claim, or a claim that checks
+out. A claim that cannot be checked is not silent, though - see below. Measured
+across 43 real sessions, claims appear on 1.8% of turns, so the quiet path is
+nearly all of them.
 
 Quoted output is stripped first because agents paste pytest's summary line
 constantly, and flagging someone for accurately quoting output would be the
