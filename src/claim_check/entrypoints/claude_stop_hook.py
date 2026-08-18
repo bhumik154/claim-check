@@ -66,8 +66,8 @@ def _cause_sentence(record) -> str:
         # claiming to know which of the four reasons is why.
         return (
             "No usable whole-suite test run for this claim: either none was "
-            "recorded in this session, or the most recent one is too old or "
-            "predates the current state of the tree."
+            "recorded in this session, or the most recent one is too old, unreadable, "
+            "or recorded against a different state of the tree."
         )
     return "The most recent test run recorded in this session was narrowed, so it covered less than the whole suite."
 
