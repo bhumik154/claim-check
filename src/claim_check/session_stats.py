@@ -149,7 +149,9 @@ def _transcript_readable(transcript_path) -> bool:
     first is a real result, the second is no result.
     """
     try:
-        return Path(transcript_path).is_file()
+        with Path(transcript_path).open("rb") as stream:
+            stream.read(1)
+        return True
     except (TypeError, OSError):
         return False
 
@@ -169,7 +171,10 @@ def _register_commands(record: dict, commands: dict) -> None:
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_use":
             continue
-        command = (block.get("input") or {}).get("command")
+        block_input = block.get("input")
+        if not isinstance(block_input, dict):
+            continue
+        command = block_input.get("command")
         if isinstance(command, str):
             commands[block.get("id")] = command
 

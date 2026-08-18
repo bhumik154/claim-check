@@ -189,3 +189,35 @@ def test_corrupt_lines_do_not_prevent_a_result(tmp_path):
     good = json.dumps(_assistant("All tests pass."))
     p.write_text(f"{good}\nnot json\n{good}\n", encoding="utf-8")
     assert summarize_session(p).unbacked == 2
+
+
+def test_a_tool_use_with_a_non_dict_input_does_not_raise(tmp_path):
+    # A tool_use block whose "input" serialises as a JSON string (or list)
+    # rather than an object must not blow up `.get("command")` in
+    # _register_commands. This is not Bash-specific: every tool_use block
+    # is inspected, so one odd tool anywhere in the transcript is enough.
+    record = {"type": "assistant", "timestamp": _T0, "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "SomeTool", "input": "not-a-dict"},
+    ]}}
+    p = _session(tmp_path, [record, _assistant("All tests pass.")])
+    stats = summarize_session(p)
+    assert stats == SessionStats(backed=0, unbacked=1, causes={NO_RUN: 1})
+
+
+def test_unreadable_existing_transcript_returns_none(tmp_path, monkeypatch):
+    # A file that stats as present but cannot be opened (ACL denial, a
+    # Windows byte-range lock held by a concurrent writer, ...) must be
+    # reported as "no statistics", never as "zero claims".
+    p = _session(tmp_path, [_assistant("All tests pass.")])
+
+    import pathlib
+
+    real_open = pathlib.Path.open
+
+    def _blocked_open(self, *args, **kwargs):
+        if self == p:
+            raise PermissionError("simulated unreadable transcript")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "open", _blocked_open)
+    assert summarize_session(p) is None
