@@ -156,6 +156,12 @@ def main(argv):
 
             if record.get("type") != "assistant":
                 continue
+            if record.get("isSidechain") is True:
+                # A subagent talking is not the main agent making a claim.
+                # `transcript.last_assistant_text` has always skipped these;
+                # this script did not, which is a real discrepancy rather
+                # than a stylistic one.
+                continue
             text = assistant_text(record)
             if not text.strip():
                 continue
