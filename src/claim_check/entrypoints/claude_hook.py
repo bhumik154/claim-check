@@ -26,7 +26,7 @@ from ..claims import extract_claims
 from ..compare import compare_claims
 from ..evidence import scope_of_run
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
-from ..session_stats import summarize_session
+from ..session_stats import ratio_suffix
 from ..shell_parser import extract_commit_message
 
 
@@ -112,15 +112,7 @@ def _run(stdin_text: Optional[str], args) -> int:
         # The commit hook was invoked to gate, so "I did not gate" is
         # information the user needs. stderr, because stdout is parsed
         # as the hook's JSON response.
-        suffix = ""
-        try:
-            stats = summarize_session(payload.get("transcript_path"))
-            if stats is not None:
-                rendered = stats.render()
-                if rendered:
-                    suffix = f" {rendered}"
-        except Exception:  # noqa: BLE001 - the ratio is a garnish, not the meal
-            suffix = ""
+        suffix = ratio_suffix(payload)
         print(
             f"claim-check: WARNING - {verdict.message}; allowing commit{suffix}",
             file=sys.stderr,

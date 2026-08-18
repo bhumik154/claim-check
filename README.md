@@ -14,9 +14,10 @@ indistinguishable from one that is broken. The note names the cause and how
 the session is going so far:
 
 ```
-claim-check: could not verify "all tests pass". No whole-suite test run was
-recorded in this session against the current state of the tree. (this session:
-2 of 6 claims had a whole-suite run behind them; 3 had no test run at all)
+claim-check: could not verify "all tests pass". No usable whole-suite test run
+for this claim: either none was recorded in this session, or the most recent
+one is too old or predates the current state of the tree. (this session: 2 of
+6 claims had a whole-suite run behind them; 3 had no test run at all)
 ```
 
 It says "had a whole-suite run behind them" rather than "verified" on purpose.

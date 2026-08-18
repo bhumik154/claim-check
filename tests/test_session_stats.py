@@ -1,7 +1,8 @@
 import json
 
+from claim_check import session_stats as session_stats_module
 from claim_check.session_stats import (
-    NARROWED_ONLY, NO_RUN, STALE, SessionStats, summarize_session,
+    NARROWED_ONLY, NO_RUN, STALE, SessionStats, ratio_suffix, summarize_session,
 )
 
 
@@ -202,6 +203,62 @@ def test_a_tool_use_with_a_non_dict_input_does_not_raise(tmp_path):
     p = _session(tmp_path, [record, _assistant("All tests pass.")])
     stats = summarize_session(p)
     assert stats == SessionStats(backed=0, unbacked=1, causes={NO_RUN: 1})
+
+
+def test_ratio_suffix_renders_when_there_is_an_unbacked_claim(tmp_path):
+    p = _session(tmp_path, [_assistant("All tests pass.")])
+    assert ratio_suffix({"transcript_path": str(p)}) == (
+        " (this session: 0 of 1 claims had a whole-suite run behind them; "
+        "1 had no test run at all)"
+    )
+
+
+def test_ratio_suffix_is_suppressed_when_every_claim_this_session_was_backed(tmp_path):
+    # The replay behind this ratio cannot see fingerprints, unlike the live
+    # evidence check the warning it is attached to is based on. If the
+    # replay says every claim, including this one, had a whole-suite run
+    # behind it, printing that ratio next to "could not verify" would
+    # contradict the very sentence it garnishes, so it must be suppressed.
+    p = _session(tmp_path, [
+        _bash("python -m pytest", "t1"),
+        _result("===== 22 passed in 0.4s =====", "t1"),
+        _assistant("All 22 tests pass."),
+    ])
+    assert ratio_suffix({"transcript_path": str(p)}) == ""
+
+
+def test_ratio_suffix_is_empty_when_no_claims_were_seen(tmp_path):
+    p = _session(tmp_path, [_assistant("Refactored the loop for clarity.")])
+    assert ratio_suffix({"transcript_path": str(p)}) == ""
+
+
+def test_ratio_suffix_survives_summarize_session_raising(monkeypatch):
+    # The docstring's promise: a failure to compute statistics must never
+    # suppress the warning this is appended to, even when the failure is an
+    # exception rather than a None return.
+    def boom(*args, **kwargs):
+        raise RuntimeError("synthetic summarize_session failure")
+
+    monkeypatch.setattr(session_stats_module, "summarize_session", boom)
+    assert ratio_suffix({"transcript_path": "irrelevant"}) == ""
+
+
+def test_ratio_suffix_survives_render_raising(monkeypatch):
+    # Same guarantee, but the exception comes from stats.render() instead of
+    # from summarize_session() itself.
+    class BoomStats:
+        unbacked = 1
+
+        def render(self):
+            raise RuntimeError("synthetic render failure")
+
+    monkeypatch.setattr(session_stats_module, "summarize_session", lambda *a, **k: BoomStats())
+    assert ratio_suffix({"transcript_path": "irrelevant"}) == ""
+
+
+def test_ratio_suffix_survives_summarize_session_returning_none(monkeypatch):
+    monkeypatch.setattr(session_stats_module, "summarize_session", lambda *a, **k: None)
+    assert ratio_suffix({"transcript_path": "irrelevant"}) == ""
 
 
 def test_unreadable_existing_transcript_returns_none(tmp_path, monkeypatch):

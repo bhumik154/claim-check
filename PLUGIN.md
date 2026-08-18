@@ -187,12 +187,12 @@ worst kind of false positive. Measured across 5,724 real assistant turns,
 that stripping removes 3% of raw detections and keeps the rest.
 
 When a claim cannot be checked, the end-of-turn hook now says so rather than
-staying quiet, and names the reason: no whole-suite test run was recorded in
-this session against the current state of the tree, which also covers a run
-that has gone stale or one recorded in a different session, or the most
-recent run in this session was narrowed and covered less than the whole
-suite. It still never blocks and never reports a claim as false on the
-strength of missing evidence.
+staying quiet, and names the reason: either no whole-suite test run for this
+claim was recorded in this session, or the most recent one is too old or no
+longer matches the current state of the tree (which also covers one recorded
+in a different session), or the most recent run in this session was narrowed
+and covered less than the whole suite. It still never blocks and never
+reports a claim as false on the strength of missing evidence.
 
 ## Configuration
 

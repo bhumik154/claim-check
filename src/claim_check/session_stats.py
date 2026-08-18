@@ -84,6 +84,39 @@ class SessionStats:
         return best
 
 
+def ratio_suffix(payload: Mapping) -> str:
+    """The session ratio in parentheses for a hook warning, or "" to print nothing.
+
+    Shared by both entry points so they render (and suppress) the ratio
+    identically. Two independent reasons can make this return "":
+
+    1. Statistics could not be computed at all. The ratio is a garnish and
+       the warning it is attached to is the meal: a failure to compute
+       statistics (summarize_session raising, returning None, or render()
+       itself raising) must never suppress the warning, so every failure
+       here is swallowed and answered with "".
+    2. The ratio would contradict the warning it is printed next to. The
+       replay that produces this ratio cannot see fingerprints, while the
+       live evidence check that produced the warning can. That lets the
+       ratio claim every claim this session, including the one just
+       flagged, had a whole-suite run behind it, in the same breath the
+       warning says this one could not be verified. When the rendered ratio
+       reports zero unbacked claims, it carries no information the reader
+       can act on and actively misleads, so it is suppressed rather than
+       printed.
+    """
+    try:
+        stats = summarize_session(payload.get("transcript_path"))
+        if stats is None:
+            return ""
+        if stats.unbacked == 0:
+            return ""
+        rendered = stats.render()
+        return f" {rendered}" if rendered else ""
+    except Exception:  # noqa: BLE001 - deliberate catch-all, see docstring
+        return ""
+
+
 def summarize_session(
     transcript_path,
     ttl_s: float = evidence.DEFAULT_TTL_S,
@@ -117,7 +150,13 @@ def summarize_session(
             if record.get("type") != "assistant":
                 continue
             if record.get("isSidechain") is True:
-                # A subagent talking is not the main agent reporting.
+                # A subagent talking is not the main agent reporting. This
+                # filter applies only to the claim side, deliberately: a
+                # whole-suite run performed inside a subagent (which may
+                # have executed in a different worktree entirely) still
+                # counts as backing a later claim made by the main agent.
+                # That inflates `backed`, the overclaim direction, so it is
+                # a stated choice rather than an accident of the filter.
                 continue
 
             text = assistant_text(record)
@@ -207,8 +246,13 @@ def _run_was_scoped(record: dict, commands: dict) -> bool:
     try:
         tokens = shlex.split(command)
     except ValueError:
+        # The command cannot be resolved at all. Treated as scoped, the
+        # conservative direction: an unrecognised command must not be able
+        # to back a whole-suite claim it was never shown to satisfy.
         return True
     if not tokens:
+        # Same reasoning as above: no command to inspect means no basis to
+        # call this run whole-suite.
         return True
     return evidence.is_scoped(tokens)
 

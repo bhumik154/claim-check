@@ -131,7 +131,9 @@ def test_no_evidence_means_a_could_not_verify_report_not_a_finding(project, tmp_
     assert "could not verify" in message.lower()
     assert "22 passed" in message
     # The no-evidence cause sentence specifically, not just the ratio clause.
-    assert "no whole-suite test run" in message.lower()
+    # Must not assert a run definitely does not exist: `load_fresh` returning
+    # None also covers a TTL expiry, where a run really was recorded.
+    assert "no usable whole-suite test run" in message.lower()
     assert hook.CORRECTION_INSTRUCTION not in message
 
 
@@ -159,20 +161,41 @@ def test_evidence_from_another_session_produces_a_could_not_verify_report(projec
     assert "could not verify" in message.lower()
     # Evidence from a different session is invisible to load_fresh, so this
     # hits the same no-evidence cause as having no record at all.
-    assert "no whole-suite test run" in message.lower()
+    assert "no usable whole-suite test run" in message.lower()
     assert hook.CORRECTION_INSTRUCTION not in message
 
 
-def test_stale_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
+def test_fingerprint_mismatch_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
+    # A fingerprint mismatch makes load_fresh return None, so this hits the
+    # same cause sentence as having no record at all.
     evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
     (project / "test_new.py").write_text("def test_n():\n    assert True\n", encoding="utf-8")
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
     message = _message_of(out)
     assert "could not verify" in message.lower()
-    # A fingerprint mismatch makes load_fresh return None, so this hits the
-    # same no-evidence cause as having no record at all.
-    assert "no whole-suite test run" in message.lower()
+    assert "no usable whole-suite test run" in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
+
+
+def test_ttl_expiry_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
+    # A whole-suite run WAS recorded this session, and the fingerprint is
+    # still valid; only its age makes it unusable. The cause sentence must
+    # not deny that a run occurred, unlike the old wording it replaces.
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    path = evidence.evidence_path(project, "s1")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["recorded_at"] = record["recorded_at"] - evidence.DEFAULT_TTL_S - 1
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
+    assert code == 0
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
+    assert "no usable whole-suite test run" in message.lower()
+    # The specific defect this test guards against: the old sentence flatly
+    # denied any run was recorded, which is false in the TTL case.
+    assert "no whole-suite test run was recorded" not in message.lower()
     assert hook.CORRECTION_INSTRUCTION not in message
 
 
@@ -281,6 +304,7 @@ def test_unverified_claim_is_reported_with_cause_and_ratio(tmp_path, capsys):
 
 
 def test_unverified_claim_still_reports_when_stats_are_unavailable(tmp_path, capsys, monkeypatch):
+    from claim_check import session_stats as session_stats_module
     from claim_check.entrypoints import claude_stop_hook
 
     transcript = tmp_path / "t.jsonl"
@@ -289,7 +313,10 @@ def test_unverified_claim_still_reports_when_stats_are_unavailable(tmp_path, cap
         "message": {"content": [{"type": "text", "text": "All tests pass."}]},
     }) + "\n", encoding="utf-8")
 
-    monkeypatch.setattr(claude_stop_hook, "summarize_session", lambda *a, **k: None)
+    # ratio_suffix now lives in session_stats.py, shared by both hooks, so
+    # the summarize_session it calls is patched there rather than on the
+    # hook module.
+    monkeypatch.setattr(session_stats_module, "summarize_session", lambda *a, **k: None)
 
     payload = json.dumps({
         "hook_event_name": "Stop", "transcript_path": str(transcript),
@@ -324,36 +351,6 @@ def test_a_turn_with_no_claim_still_produces_no_output_at_all(tmp_path, capsys):
     })
     assert main(stdin_text=payload) == 0
     assert capsys.readouterr().out == ""
-
-
-def test_ratio_suffix_survives_summarize_session_raising(project, tmp_path, monkeypatch):
-    # The docstring's promise: a failure to compute statistics must never
-    # suppress the warning itself, even when the failure is an exception
-    # rather than a None return.
-    def boom(*args, **kwargs):
-        raise RuntimeError("synthetic summarize_session failure")
-
-    monkeypatch.setattr(hook, "summarize_session", boom)
-    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
-    assert code == 0
-    message = _message_of(out)
-    assert message is not None
-    assert "could not verify" in message.lower()
-
-
-def test_ratio_suffix_survives_render_raising(project, tmp_path, monkeypatch):
-    # Same guarantee, but the exception comes from stats.render() instead of
-    # from summarize_session() itself.
-    class BoomStats:
-        def render(self):
-            raise RuntimeError("synthetic render failure")
-
-    monkeypatch.setattr(hook, "summarize_session", lambda *a, **k: BoomStats())
-    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
-    assert code == 0
-    message = _message_of(out)
-    assert message is not None
-    assert "could not verify" in message.lower()
 
 
 def test_claim_check_verbose_is_gone(tmp_path):

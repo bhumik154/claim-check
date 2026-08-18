@@ -328,9 +328,10 @@ def test_abstention_warning_carries_the_session_ratio(tmp_path, capsys):
         "session_id": "s1",
     })
     assert main(stdin_text=payload, argv=[]) == 0
-    err = capsys.readouterr().err
-    assert "could not verify" in err.lower()
-    assert "this session:" in err
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "", "no deny JSON may be emitted"
+    assert "could not verify" in captured.err.lower()
+    assert "this session:" in captured.err
 
 
 def test_missing_transcript_path_still_warns_without_a_ratio(tmp_path, capsys):
@@ -358,6 +359,44 @@ def test_missing_transcript_path_still_warns_without_a_ratio(tmp_path, capsys):
         "session_id": "s1",
     })
     assert main(stdin_text=payload, argv=[]) == 0
-    err = capsys.readouterr().err
-    assert "could not verify" in err.lower()
-    assert "this session:" not in err
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "", "no deny JSON may be emitted"
+    assert "could not verify" in captured.err.lower()
+    assert "this session:" not in captured.err
+
+
+def test_abstention_warning_survives_ratio_suffix_raising(tmp_path, capsys, monkeypatch):
+    # The commit-path copy of this guard, mirroring the two dedicated tests
+    # on the Stop hook's ratio_suffix (test_session_stats.py). Both entry
+    # points now call the same shared ratio_suffix, so patching it here to
+    # raise proves the commit path's warning survives the failure too, not
+    # just the Stop hook's.
+    from claim_check.entrypoints import claude_hook
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("synthetic ratio_suffix failure")
+
+    monkeypatch.setattr(claude_hook, "ratio_suffix", boom)
+
+    (tmp_path / "pytest.ini").write_text(
+        '[pytest]\naddopts = -m "not slow"\nmarkers =\n    slow: slow test\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "test_x.py").write_text(
+        "import pytest\n\n"
+        "def test_a():\n    assert True\n\n"
+        "@pytest.mark.slow\n"
+        "def test_c():\n    assert True\n",
+        encoding="utf-8",
+    )
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": 'git commit -m "All 99 tests pass" -- test_x.py'},
+        "cwd": str(tmp_path),
+        "session_id": "s1",
+    })
+    assert main(stdin_text=payload, argv=[]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "", "no deny JSON may be emitted"
+    assert "could not verify" in captured.err.lower()

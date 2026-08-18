@@ -39,7 +39,7 @@ from .._payload import resolve_cwd, session_id
 from ..compare import compare_claims
 from ..conversation import extract_claims
 from ..evidence import counts_from_record, load_fresh
-from ..session_stats import summarize_session
+from ..session_stats import ratio_suffix
 from ..transcript import last_assistant_text
 
 # Appended to every finding. The one outcome this must never encourage is an
@@ -58,24 +58,18 @@ def _note(message: str) -> str:
 
 def _cause_sentence(record) -> str:
     if record is None:
-        return "No whole-suite test run was recorded in this session against the current state of the tree."
+        # `load_fresh` collapses four distinct reasons into this one None:
+        # no record at all, a malformed record, a TTL expiry, or a
+        # fingerprint mismatch. In the TTL case a whole-suite run really was
+        # recorded this session, so the sentence must not deny that a run
+        # exists; it can only say the run on hand is not usable, without
+        # claiming to know which of the four reasons is why.
+        return (
+            "No usable whole-suite test run for this claim: either none was "
+            "recorded in this session, or the most recent one is too old or "
+            "predates the current state of the tree."
+        )
     return "The most recent test run recorded in this session was narrowed, so it covered less than the whole suite."
-
-
-def _ratio_suffix(payload: dict) -> str:
-    """The session ratio in parentheses, or "" if it cannot be computed.
-
-    The ratio is a garnish and the warning is the meal: a failure to compute
-    statistics must never suppress the warning itself.
-    """
-    try:
-        stats = summarize_session(payload.get("transcript_path"))
-        if stats is None:
-            return ""
-        rendered = stats.render()
-        return f" {rendered}" if rendered else ""
-    except Exception:  # noqa: BLE001 - deliberate catch-all, see docstring
-        return ""
 
 
 def _run(stdin_text: Optional[str]) -> int:
@@ -124,7 +118,7 @@ def _run(stdin_text: Optional[str]) -> int:
         # because the cause is the part the reader can act on.
         print(_note(
             f'claim-check: could not verify "{claim.raw_text}". '
-            f"{_cause_sentence(record)}{_ratio_suffix(payload)}"
+            f"{_cause_sentence(record)}{ratio_suffix(payload)}"
         ))
         return 0
 
