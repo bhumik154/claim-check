@@ -184,10 +184,13 @@ constantly, and flagging someone for accurately quoting output would be the
 worst kind of false positive. Measured across 5,724 real assistant turns,
 that stripping removes 3% of raw detections and keeps the rest.
 
-Set `CLAIM_CHECK_VERBOSE=1` if you also want a note when a claim could not be
-checked at all. It is off by default because roughly half of claims have no
-usable evidence, and a steady stream of notes you can do nothing about is how
-a tool gets uninstalled.
+When a claim cannot be checked, the end-of-turn hook now says so rather than
+staying quiet, and names the reason: no whole-suite test run was recorded in
+this session against the current state of the tree, which also covers a run
+that has gone stale or one recorded in a different session, or the most
+recent run in this session was narrowed and covered less than the whole
+suite. It still never blocks and never reports a claim as false on the
+strength of missing evidence.
 
 ## Configuration
 

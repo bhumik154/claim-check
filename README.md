@@ -8,6 +8,23 @@ If a commit message says "22 passed" or "all tests pass", claim-check runs your 
 
 As a Claude Code plugin it also checks claims made in conversation, by comparing them against test runs the agent actually made. That part reports and never blocks.
 
+When it cannot check a claim it says so instead of going quiet, because a tool
+that is silent when it verified and silent when it had nothing to check is
+indistinguishable from one that is broken. The note names the cause and how
+the session is going so far:
+
+```
+claim-check: could not verify "all tests pass". No whole-suite test run was
+recorded in this session against the current state of the tree. (this session:
+2 of 6 claims had a whole-suite run behind them; 3 had no test run at all)
+```
+
+It says "had a whole-suite run behind them" rather than "verified" on purpose.
+That count is reconstructed from the session transcript, which cannot see
+whether the source tree changed after the run, so it is a weaker statement
+than the one the commit gate makes. It only speaks up on a turn that states a
+test-count claim; a turn that says nothing about tests produces no output.
+
 Works as a pre-commit hook, a Claude Code plugin, or a plain CLI. No runtime dependencies.
 
 ## Install
@@ -30,7 +47,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.5.0
+    rev: v0.6.0
     hooks:
       - id: claim-check
 ```
@@ -46,7 +63,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.5.0
+pip install git+https://github.com/bhumik154/claim-check@v0.6.0
 ```
 
 ```bash

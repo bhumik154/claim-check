@@ -3,6 +3,8 @@
 # pass. Usage: scripts/smoke_e2e.sh <scratch-dir>
 set -u
 ROOT="${1:?usage: smoke_e2e.sh <scratch-dir>}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && { pwd -W 2>/dev/null || pwd; })"
 rm -rf "$ROOT"; mkdir -p "$ROOT"; cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 
@@ -109,6 +111,47 @@ try "long separator, honest claim"    ACCEPT "x
 1 passed"
 E=$(date +%s)
 echo "         hook wall time: $((E-S))s (was 12s before the fix)"
+
+echo "=== stop hook: unbacked claim reports cause and session ratio ==="
+# The Stop hook is not wired through git commit-msg; Claude Code feeds it a
+# JSON payload on stdin directly. Build a minimal transcript with one
+# assistant turn that claims all tests pass, and no test run recorded
+# anywhere in this fresh session, then invoke the entry point the same way
+# the plugin's hooks.json does: `python -m claim_check.entrypoints...`.
+PY="$(command -v python || command -v python3)"
+# Native Windows Python does not understand MSYS-style /tmp paths passed as
+# arguments (only inherited cwd translates correctly), so resolve a
+# Windows-style absolute path for anything handed to it as a string.
+NATIVE_ROOT="$(pwd -W 2>/dev/null || pwd)"
+TRANSCRIPT="$NATIVE_ROOT/session.jsonl"
+"$PY" -c "
+import json
+with open(r'$TRANSCRIPT', 'w', encoding='utf-8') as f:
+    f.write(json.dumps({
+        'type': 'assistant',
+        'isSidechain': False,
+        'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'All tests pass.'}]},
+    }) + chr(10))
+"
+PAYLOAD="$("$PY" -c "
+import json
+print(json.dumps({
+    'hook_event_name': 'Stop',
+    'session_id': 'smoke-stop-1',
+    'cwd': r'$NATIVE_ROOT',
+    'transcript_path': r'$TRANSCRIPT',
+    'stop_hook_active': False,
+}))
+")"
+STOP_OUT=$(PYTHONPATH="$PROJECT_ROOT/src" "$PY" -m claim_check.entrypoints.claude_stop_hook <<< "$PAYLOAD")
+STOP_CODE=$?
+if [ $STOP_CODE -eq 0 ] && echo "$STOP_OUT" | grep -q 'could not verify' && echo "$STOP_OUT" | grep -q 'this session:'; then
+  mark="ok  "
+else
+  mark="FAIL"; FAILURES=$((FAILURES+1))
+fi
+printf "%s  exit=%-3s               %s\n" "$mark" "$STOP_CODE" "unbacked claim, no run at all"
+echo "$STOP_OUT" | head -2 | sed 's/^/         /'
 
 echo
 if [ $FAILURES -eq 0 ]; then echo "ALL E2E SCENARIOS PASS"; else echo "$FAILURES E2E SCENARIO(S) FAILED"; exit 1; fi
