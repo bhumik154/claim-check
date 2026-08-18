@@ -46,23 +46,33 @@ def last_assistant_text(path, max_bytes: int = DEFAULT_WINDOW_BYTES) -> Optional
         if record.get("isSidechain") is True:
             continue
 
-        message = record.get("message")
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-
-        blocks = [
-            block.get("text", "")
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
-        text = "\n".join(block for block in blocks if isinstance(block, str))
+        text = assistant_text(record)
         if text.strip():
             return text
 
     return None
+
+
+def assistant_text(record: dict) -> str:
+    """The joined prose of an assistant record, or "" if it carries none.
+
+    Text blocks only. A record holding just tool calls contains no prose and
+    therefore no claim.
+    """
+    if not isinstance(record, dict):
+        return ""
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    blocks = [
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return "\n".join(block for block in blocks if isinstance(block, str))
 
 
 def _tail_lines(path, max_bytes: int):

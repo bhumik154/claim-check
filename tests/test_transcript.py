@@ -8,6 +8,7 @@ evidence that anything is wrong.
 import json
 
 from claim_check import transcript
+from claim_check.transcript import assistant_text
 
 
 def _assistant(text, **extra):
@@ -143,3 +144,22 @@ def test_a_transcript_with_no_assistant_text_returns_none(tmp_path):
 def test_an_empty_text_block_is_not_treated_as_a_message(tmp_path):
     path = _write(tmp_path, _assistant("real content"), _assistant("   "))
     assert transcript.last_assistant_text(path) == "real content"
+
+
+def test_assistant_text_joins_only_text_blocks():
+    record = {
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "text", "text": "first"},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+            {"type": "text", "text": "second"},
+        ]},
+    }
+    assert assistant_text(record) == "first\nsecond"
+
+
+def test_assistant_text_returns_empty_for_malformed_records():
+    assert assistant_text({}) == ""
+    assert assistant_text({"message": None}) == ""
+    assert assistant_text({"message": {"content": "not a list"}}) == ""
+    assert assistant_text({"message": {"content": [{"type": "text"}]}}) == ""
