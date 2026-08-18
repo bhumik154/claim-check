@@ -885,12 +885,6 @@ def _classify(saw_any_run, saw_whole_suite, whole_suite_at, claim_at, ttl_s):
     return None
 ```
 
-Remove the `_ = command` placeholder line and the unused assignment; call `_register_commands(record, commands)` directly:
-
-```python
-            _register_commands(record, commands)
-```
-
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_session_stats.py -v`

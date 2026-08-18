@@ -8,6 +8,25 @@ If a commit message says "22 passed" or "all tests pass", claim-check runs your 
 
 As a Claude Code plugin it also checks claims made in conversation, by comparing them against test runs the agent actually made. That part reports and never blocks.
 
+When it cannot check a claim it says so instead of going quiet, because a tool
+that is silent when it verified and silent when it had nothing to check is
+indistinguishable from one that is broken. The note names the cause and how
+the session is going so far:
+
+```
+claim-check: could not verify "all tests pass". No usable whole-suite test run
+for this claim: either none was recorded in this session, or the most recent
+one is too old, unreadable, or recorded against a different state of the tree.
+(this session: 2 of 6 claims had a whole-suite run behind them; 3 had no test
+run at all)
+```
+
+It says "had a whole-suite run behind them" rather than "verified" on purpose.
+That count is reconstructed from the session transcript, which cannot see
+whether the source tree changed after the run, so it is a weaker statement
+than the one the commit gate makes. It only speaks up on a turn that states a
+test-count claim; a turn that says nothing about tests produces no output.
+
 Works as a pre-commit hook, a Claude Code plugin, or a plain CLI. No runtime dependencies.
 
 ## Install
@@ -30,7 +49,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.5.0
+    rev: v0.6.0
     hooks:
       - id: claim-check
 ```
@@ -46,7 +65,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.5.0
+pip install git+https://github.com/bhumik154/claim-check@v0.6.0
 ```
 
 ```bash
@@ -209,7 +228,7 @@ The cases worth knowing about:
 
 **A test that forges a whole pytest session can still fool it.** Output printed by a test gets replayed in the failure report, which always comes before that session's real summary, so the last-line-per-session rule handles the realistic case. The gap that remains depends on ordering. A forged summary line printed *before* a forged `test session starts` header is believed, because the forged header closes the segment right after the forged line and its count gets added to the real one. The reverse order is safe: both summaries land in the same segment and the real one still comes last. Both orderings are pinned by tests. Anything that can make a test print output in that exact order can already edit the test suite directly.
 
-**The end-of-turn check reports, it does not block.** It also only speaks when it has fresh, whole-suite, same-session evidence from a run the agent itself made, and stays silent otherwise. Roughly half of claims have no such evidence, so about half go unchecked. That is deliberate: unknown is never reported as wrong.
+**The end-of-turn check reports, it does not block.** When it lacks fresh, whole-suite, same-session evidence from a run the agent itself made, it cannot check the claim, and it says so rather than checking it - naming the reason and, when it can compute one, the session ratio. Roughly half of claims still go unchecked; what changed is that you now find out which ones. That is deliberate: unknown is never reported as wrong.
 
 **An honest claim that mentions an error still gets flagged.** `"22 passed, 1 error"` against a real 22-passed-1-error run is reported as a mismatch, because an error means some test never ran and the true denominator is unknown. That strictness is what makes a bare count mean anything.
 

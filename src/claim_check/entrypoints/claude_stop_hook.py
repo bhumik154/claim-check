@@ -13,20 +13,24 @@ false-positive rate.
 recorded from runs the agent already made. Re-running a suite at the end of
 every turn is what would get this uninstalled inside a day.
 
-The gate is narrow on purpose. A finding requires all of:
+The gate for a FINDING of falsehood is narrow on purpose. A finding requires
+all of:
   - stop_hook_active false
   - a claim in the final assistant message, once quotations are stripped
   - fresh, same-session evidence
   - from a run that was not scope-narrowing
   - that reported no errors
   - and that contradicts the claim
-Anything else is silence. Measured across 43 real sessions, claims appear on
-1.8% of turns and about half have usable evidence, so the quiet path is
-overwhelmingly the common one.
+A turn with no claim at all, or a true claim, still produces no output. But a
+claim that fails any of the evidence conditions above - no evidence, scoped
+evidence, evidence from another session, or stale evidence - is not silent
+either: it is reported as unverified, distinct from a finding of falsehood.
+Measured across 43 real sessions, claims appear on 1.8% of turns, and about
+half of those claims lack usable evidence and now speak up as unverified
+rather than staying quiet.
 """
 
 import json
-import os
 import sys
 from typing import Optional, Sequence
 
@@ -35,6 +39,7 @@ from .._payload import resolve_cwd, session_id
 from ..compare import compare_claims
 from ..conversation import extract_claims
 from ..evidence import counts_from_record, load_fresh
+from ..session_stats import ratio_suffix
 from ..transcript import last_assistant_text
 
 # Appended to every finding. The one outcome this must never encourage is an
@@ -49,6 +54,22 @@ CORRECTION_INSTRUCTION = (
 
 def _note(message: str) -> str:
     return json.dumps({"systemMessage": message})
+
+
+def _cause_sentence(record) -> str:
+    if record is None:
+        # `load_fresh` collapses four distinct reasons into this one None:
+        # no record at all, a malformed record, a TTL expiry, or a
+        # fingerprint mismatch. In the TTL case a whole-suite run really was
+        # recorded this session, so the sentence must not deny that a run
+        # exists; it can only say the run on hand is not usable, without
+        # claiming to know which of the four reasons is why.
+        return (
+            "No usable whole-suite test run for this claim: either none was "
+            "recorded in this session, or the most recent one is too old, unreadable, "
+            "or recorded against a different state of the tree."
+        )
+    return "The most recent test run recorded in this session was narrowed, so it covered less than the whole suite."
 
 
 def _run(stdin_text: Optional[str]) -> int:
@@ -92,14 +113,13 @@ def _run(stdin_text: Optional[str]) -> int:
     record = load_fresh(resolve_cwd(payload), session_id(payload))
 
     if record is None or record.get("scoped") is True:
-        # No usable evidence. Unknown is never reported as wrong; the note
-        # exists only for someone who has opted into seeing it.
-        if os.environ.get("CLAIM_CHECK_VERBOSE"):
-            print(_note(
-                f'claim-check: could not verify "{claim.raw_text}". No whole-suite '
-                "test run was recorded in this session against the current state "
-                "of the tree."
-            ))
+        # No usable evidence. Reported, never as a finding of falsehood: the
+        # claim may be perfectly true and simply unchecked. The cause leads,
+        # because the cause is the part the reader can act on.
+        print(_note(
+            f'claim-check: could not verify "{claim.raw_text}". '
+            f"{_cause_sentence(record)}{ratio_suffix(payload)}"
+        ))
         return 0
 
     counts = counts_from_record(record)

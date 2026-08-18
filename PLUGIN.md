@@ -176,18 +176,23 @@ The bar for saying anything is deliberately high. All of these must hold:
 - that run reported no errors
 - and the claim actually contradicts it
 
-Anything else is silence. Measured across 43 real sessions, claims appear on
-1.8% of turns, so the quiet path is nearly all of them.
+Anything else stays quiet: a turn that makes no claim, or a claim that checks
+out. A claim that cannot be checked is not silent, though - see below. Measured
+across 43 real sessions, claims appear on 1.8% of turns, so the quiet path is
+nearly all of them.
 
 Quoted output is stripped first because agents paste pytest's summary line
 constantly, and flagging someone for accurately quoting output would be the
 worst kind of false positive. Measured across 5,724 real assistant turns,
 that stripping removes 3% of raw detections and keeps the rest.
 
-Set `CLAIM_CHECK_VERBOSE=1` if you also want a note when a claim could not be
-checked at all. It is off by default because roughly half of claims have no
-usable evidence, and a steady stream of notes you can do nothing about is how
-a tool gets uninstalled.
+When a claim cannot be checked, the end-of-turn hook now says so rather than
+staying quiet, and names the reason: either no whole-suite test run for this
+claim was recorded in this session, or the most recent one is too old or no
+longer matches the current state of the tree (which also covers one recorded
+in a different session), or the most recent run in this session was narrowed
+and covered less than the whole suite. It still never blocks and never
+reports a claim as false on the strength of missing evidence.
 
 ## Configuration
 

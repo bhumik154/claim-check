@@ -12,7 +12,9 @@ A finding is emitted only when ALL of these hold:
   - that run was NOT scope-narrowing
   - that run reported no errors
   - the claim contradicts it
-Everything else is silence.
+When evidence is missing, scoped, stale, or errored, the claim is instead
+reported as unverified rather than as a finding. Only a turn with no claim at
+all, or a true claim, produces no output.
 """
 
 import contextlib
@@ -35,7 +37,6 @@ WHOLE_SUITE_OUTPUT = (
 def project(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    monkeypatch.delenv("CLAIM_CHECK_VERBOSE", raising=False)
     root = tmp_path / "proj"
     root.mkdir()
     (root / "test_a.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
@@ -120,35 +121,82 @@ def test_stop_hook_active_short_circuits_before_anything_else(project, tmp_path)
     assert out == ""
 
 
-def test_no_evidence_means_silence_not_a_finding(project, tmp_path):
+def test_no_evidence_means_a_could_not_verify_report_not_a_finding(project, tmp_path):
     # Unknown is never treated as wrong. This is the same asymmetry the
-    # evidence store is built around.
+    # evidence store is built around. But unknown is no longer silent either:
+    # it is reported as unverified, distinct from a mismatch finding.
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
+    assert "22 passed" in message
+    # The no-evidence cause sentence specifically, not just the ratio clause.
+    # Must not assert a run definitely does not exist: `load_fresh` returning
+    # None also covers a TTL expiry, where a run really was recorded.
+    assert "no usable whole-suite test run" in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
-def test_scoped_evidence_cannot_produce_a_finding(project, tmp_path):
+def test_scoped_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
     # `pytest -k thing` reports a true tally for a subset. Using it to
-    # contradict a claim about the whole suite would be a false accusation.
+    # contradict a claim about the whole suite would be a false accusation,
+    # but the claim is still reported as unverified.
     code, out = _run(project, tmp_path, "All done. 22 passed.", command="pytest -k thing")
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
+    # The scoped cause sentence specifically: only the most recent run is
+    # ever known, so it must not claim to be the only run this session made.
+    assert "was narrowed" in message.lower()
+    assert "most recent test run" in message.lower()
+    assert "only test run" not in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
-def test_evidence_from_another_session_cannot_produce_a_finding(project, tmp_path):
+def test_evidence_from_another_session_produces_a_could_not_verify_report(project, tmp_path):
     evidence.record_run(project, "other-session", "python -m pytest", WHOLE_SUITE_OUTPUT)
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
+    # Evidence from a different session is invisible to load_fresh, so this
+    # hits the same no-evidence cause as having no record at all.
+    assert "no usable whole-suite test run" in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
-def test_stale_evidence_cannot_produce_a_finding(project, tmp_path):
+def test_fingerprint_mismatch_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
+    # A fingerprint mismatch makes load_fresh return None, so this hits the
+    # same cause sentence as having no record at all.
     evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
     (project / "test_new.py").write_text("def test_n():\n    assert True\n", encoding="utf-8")
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
-    assert out == ""
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
+    assert "no usable whole-suite test run" in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
+
+
+def test_ttl_expiry_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
+    # A whole-suite run WAS recorded this session, and the fingerprint is
+    # still valid; only its age makes it unusable. The cause sentence must
+    # not deny that a run occurred, unlike the old wording it replaces.
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    path = evidence.evidence_path(project, "s1")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["recorded_at"] = record["recorded_at"] - evidence.DEFAULT_TTL_S - 1
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
+    assert code == 0
+    message = _message_of(out)
+    assert "could not verify" in message.lower()
+    assert "no usable whole-suite test run" in message.lower()
+    # The specific defect this test guards against: the old sentence flatly
+    # denied any run was recorded, which is false in the TTL case.
+    assert "no whole-suite test run was recorded" not in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
 def test_a_run_reporting_errors_cannot_produce_a_finding(project, tmp_path):
@@ -178,11 +226,9 @@ def test_no_finding_ever_tells_the_agent_to_change_tests_or_source():
         assert phrase not in lowered or "do not" in lowered
 
 
-def test_unverifiable_claims_are_reported_only_when_verbose_is_set(project, tmp_path, monkeypatch):
-    # Silence on the common path is what keeps this installable. Around half
-    # of claims have no usable evidence, so reporting each one would be a
-    # steady stream of notes the user can do nothing about.
-    monkeypatch.setenv("CLAIM_CHECK_VERBOSE", "1")
+def test_unverifiable_claims_are_reported(project, tmp_path):
+    # About half of claims have no usable evidence. Those are reported too,
+    # distinct from a mismatch finding, so silence never means "unchecked".
     code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
     assert code == 0
     assert "could not verify" in _message_of(out).lower()
@@ -233,3 +279,81 @@ def test_the_hook_never_runs_pytest(project, tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     code, _ = _run(project, tmp_path, "All done. 22 passed.")
     assert code == 0
+
+
+def test_unverified_claim_is_reported_with_cause_and_ratio(tmp_path, capsys):
+    from claim_check.entrypoints.claude_stop_hook import main
+
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
+        "message": {"content": [{"type": "text", "text": "All tests pass."}]},
+    }) + "\n", encoding="utf-8")
+
+    payload = json.dumps({
+        "hook_event_name": "Stop",
+        "transcript_path": str(transcript),
+        "cwd": str(tmp_path),
+        "session_id": "s1",
+    })
+    assert main(stdin_text=payload) == 0
+    out = json.loads(capsys.readouterr().out)["systemMessage"]
+    assert "could not verify" in out.lower()
+    assert "no test run" in out.lower()
+    assert "0 of 1 claims" in out
+
+
+def test_unverified_claim_still_reports_when_stats_are_unavailable(tmp_path, capsys, monkeypatch):
+    from claim_check import session_stats as session_stats_module
+    from claim_check.entrypoints import claude_stop_hook
+
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
+        "message": {"content": [{"type": "text", "text": "All tests pass."}]},
+    }) + "\n", encoding="utf-8")
+
+    # ratio_suffix now lives in session_stats.py, shared by both hooks, so
+    # the summarize_session it calls is patched there rather than on the
+    # hook module.
+    monkeypatch.setattr(session_stats_module, "summarize_session", lambda *a, **k: None)
+
+    payload = json.dumps({
+        "hook_event_name": "Stop", "transcript_path": str(transcript),
+        "cwd": str(tmp_path), "session_id": "s1",
+    })
+    assert claude_stop_hook.main(stdin_text=payload) == 0
+    out = json.loads(capsys.readouterr().out)["systemMessage"]
+    assert "could not verify" in out.lower()
+    assert "this session:" not in out
+
+
+def test_a_turn_with_no_claim_still_produces_no_output_at_all(tmp_path, capsys):
+    # The non-negotiable rule. Holds even though this session's ratio would
+    # be terrible, because the claim gate runs before anything else. The
+    # final message deliberately contains "pass" (in "passthrough") so it
+    # survives the cheap prefilter and actually reaches extract_claims,
+    # which must then recognize it as not a claim.
+    from claim_check.entrypoints.claude_stop_hook import main
+
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("\n".join(json.dumps(r) for r in [
+        {"type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
+         "message": {"content": [{"type": "text", "text": "All tests pass."}]}},
+        {"type": "assistant", "timestamp": "2026-08-11T05:01:00.000Z",
+         "message": {"content": [{"type": "text",
+                                   "text": "Renamed a variable in the passthrough helper."}]}},
+    ]) + "\n", encoding="utf-8")
+
+    payload = json.dumps({
+        "hook_event_name": "Stop", "transcript_path": str(transcript),
+        "cwd": str(tmp_path), "session_id": "s1",
+    })
+    assert main(stdin_text=payload) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_claim_check_verbose_is_gone(tmp_path):
+    import inspect
+    from claim_check.entrypoints import claude_stop_hook
+    assert "CLAIM_CHECK_VERBOSE" not in inspect.getsource(claude_stop_hook)

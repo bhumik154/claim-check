@@ -7,7 +7,12 @@ evidence that anything is wrong.
 
 import json
 
+import pytest
+
 from claim_check import transcript
+from claim_check.transcript import (
+    ReplayAborted, assistant_text, iter_records, record_timestamp,
+)
 
 
 def _assistant(text, **extra):
@@ -143,3 +148,82 @@ def test_a_transcript_with_no_assistant_text_returns_none(tmp_path):
 def test_an_empty_text_block_is_not_treated_as_a_message(tmp_path):
     path = _write(tmp_path, _assistant("real content"), _assistant("   "))
     assert transcript.last_assistant_text(path) == "real content"
+
+
+def test_assistant_text_joins_only_text_blocks():
+    record = {
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "text", "text": "first"},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+            {"type": "text", "text": "second"},
+        ]},
+    }
+    assert assistant_text(record) == "first\nsecond"
+
+
+def test_assistant_text_returns_empty_for_malformed_records():
+    assert assistant_text({}) == ""
+    assert assistant_text({"message": None}) == ""
+    assert assistant_text({"message": {"content": "not a list"}}) == ""
+    assert assistant_text({"message": {"content": [{"type": "text"}]}}) == ""
+
+
+def _write_jsonl(path, records):
+    path.write_text(
+        "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def test_iter_records_yields_every_record_in_file_order(tmp_path):
+    p = _write_jsonl(tmp_path / "t.jsonl", [{"i": 0}, {"i": 1}, {"i": 2}])
+    assert [r["i"] for r in iter_records(p)] == [0, 1, 2]
+
+
+def test_iter_records_skips_corrupt_and_blank_lines_without_stopping(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text('{"i": 0}\n\nnot json at all\n{"i": 1}\n', encoding="utf-8")
+    assert [r["i"] for r in iter_records(p)] == [0, 1]
+
+
+def test_iter_records_skips_a_truncated_final_line(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text('{"i": 0}\n{"i": 1', encoding="utf-8")
+    assert [r["i"] for r in iter_records(p)] == [0]
+
+
+def test_iter_records_yields_nothing_for_a_missing_file(tmp_path):
+    assert list(iter_records(tmp_path / "nope.jsonl")) == []
+
+
+def test_iter_records_yields_nothing_for_a_directory(tmp_path):
+    # A directory raises PermissionError on Windows, IsADirectoryError on Linux.
+    assert list(iter_records(tmp_path)) == []
+
+
+def test_iter_records_yields_nothing_for_an_unusable_path_type():
+    assert list(iter_records(None)) == []
+
+
+def test_iter_records_raises_when_the_budget_is_exceeded(tmp_path):
+    p = _write_jsonl(tmp_path / "t.jsonl", [{"i": n} for n in range(5000)])
+    with pytest.raises(ReplayAborted):
+        # A zero budget is already spent, so the first check trips it.
+        list(iter_records(p, budget_s=0.0))
+
+
+def test_iter_records_completes_within_a_generous_budget(tmp_path):
+    p = _write_jsonl(tmp_path / "t.jsonl", [{"i": n} for n in range(5000)])
+    assert len(list(iter_records(p, budget_s=30.0))) == 5000
+
+
+def test_record_timestamp_parses_iso8601_with_z():
+    ts = record_timestamp({"timestamp": "2026-08-11T05:03:41.000Z"})
+    assert ts is not None and ts > 0
+
+
+def test_record_timestamp_returns_none_for_missing_or_malformed():
+    assert record_timestamp({}) is None
+    assert record_timestamp({"timestamp": 12345}) is None
+    assert record_timestamp({"timestamp": "not a date"}) is None
