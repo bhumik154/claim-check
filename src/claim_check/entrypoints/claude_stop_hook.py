@@ -13,16 +13,21 @@ false-positive rate.
 recorded from runs the agent already made. Re-running a suite at the end of
 every turn is what would get this uninstalled inside a day.
 
-The gate is narrow on purpose. A finding requires all of:
+The gate for a FINDING of falsehood is narrow on purpose. A finding requires
+all of:
   - stop_hook_active false
   - a claim in the final assistant message, once quotations are stripped
   - fresh, same-session evidence
   - from a run that was not scope-narrowing
   - that reported no errors
   - and that contradicts the claim
-Anything else is silence. Measured across 43 real sessions, claims appear on
-1.8% of turns and about half have usable evidence, so the quiet path is
-overwhelmingly the common one.
+A turn with no claim at all, or a true claim, still produces no output. But a
+claim that fails any of the evidence conditions above - no evidence, scoped
+evidence, evidence from another session, or stale evidence - is not silent
+either: it is reported as unverified, distinct from a finding of falsehood.
+Measured across 43 real sessions, claims appear on 1.8% of turns, and about
+half of those claims lack usable evidence and now speak up as unverified
+rather than staying quiet.
 """
 
 import json
@@ -54,7 +59,7 @@ def _note(message: str) -> str:
 def _cause_sentence(record) -> str:
     if record is None:
         return "No whole-suite test run was recorded in this session against the current state of the tree."
-    return "The only test run recorded in this session was narrowed, so it covered less than the whole suite."
+    return "The most recent test run recorded in this session was narrowed, so it covered less than the whole suite."
 
 
 def _ratio_suffix(payload: dict) -> str:
@@ -63,11 +68,14 @@ def _ratio_suffix(payload: dict) -> str:
     The ratio is a garnish and the warning is the meal: a failure to compute
     statistics must never suppress the warning itself.
     """
-    stats = summarize_session(payload.get("transcript_path"))
-    if stats is None:
+    try:
+        stats = summarize_session(payload.get("transcript_path"))
+        if stats is None:
+            return ""
+        rendered = stats.render()
+        return f" {rendered}" if rendered else ""
+    except Exception:  # noqa: BLE001 - deliberate catch-all, see docstring
         return ""
-    rendered = stats.render()
-    return f" {rendered}" if rendered else ""
 
 
 def _run(stdin_text: Optional[str]) -> int:

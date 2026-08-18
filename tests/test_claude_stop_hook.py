@@ -37,7 +37,6 @@ WHOLE_SUITE_OUTPUT = (
 def project(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    monkeypatch.delenv("CLAIM_CHECK_VERBOSE", raising=False)
     root = tmp_path / "proj"
     root.mkdir()
     (root / "test_a.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
@@ -131,6 +130,9 @@ def test_no_evidence_means_a_could_not_verify_report_not_a_finding(project, tmp_
     message = _message_of(out)
     assert "could not verify" in message.lower()
     assert "22 passed" in message
+    # The no-evidence cause sentence specifically, not just the ratio clause.
+    assert "no whole-suite test run" in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
 def test_scoped_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
@@ -141,6 +143,12 @@ def test_scoped_evidence_produces_a_could_not_verify_report_not_a_finding(projec
     assert code == 0
     message = _message_of(out)
     assert "could not verify" in message.lower()
+    # The scoped cause sentence specifically: only the most recent run is
+    # ever known, so it must not claim to be the only run this session made.
+    assert "was narrowed" in message.lower()
+    assert "most recent test run" in message.lower()
+    assert "only test run" not in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
 def test_evidence_from_another_session_produces_a_could_not_verify_report(project, tmp_path):
@@ -149,6 +157,10 @@ def test_evidence_from_another_session_produces_a_could_not_verify_report(projec
     assert code == 0
     message = _message_of(out)
     assert "could not verify" in message.lower()
+    # Evidence from a different session is invisible to load_fresh, so this
+    # hits the same no-evidence cause as having no record at all.
+    assert "no whole-suite test run" in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
 def test_stale_evidence_produces_a_could_not_verify_report_not_a_finding(project, tmp_path):
@@ -158,6 +170,10 @@ def test_stale_evidence_produces_a_could_not_verify_report_not_a_finding(project
     assert code == 0
     message = _message_of(out)
     assert "could not verify" in message.lower()
+    # A fingerprint mismatch makes load_fresh return None, so this hits the
+    # same no-evidence cause as having no record at all.
+    assert "no whole-suite test run" in message.lower()
+    assert hook.CORRECTION_INSTRUCTION not in message
 
 
 def test_a_run_reporting_errors_cannot_produce_a_finding(project, tmp_path):
@@ -287,7 +303,10 @@ def test_unverified_claim_still_reports_when_stats_are_unavailable(tmp_path, cap
 
 def test_a_turn_with_no_claim_still_produces_no_output_at_all(tmp_path, capsys):
     # The non-negotiable rule. Holds even though this session's ratio would
-    # be terrible, because the claim gate runs before anything else.
+    # be terrible, because the claim gate runs before anything else. The
+    # final message deliberately contains "pass" (in "passthrough") so it
+    # survives the cheap prefilter and actually reaches extract_claims,
+    # which must then recognize it as not a claim.
     from claim_check.entrypoints.claude_stop_hook import main
 
     transcript = tmp_path / "t.jsonl"
@@ -295,7 +314,8 @@ def test_a_turn_with_no_claim_still_produces_no_output_at_all(tmp_path, capsys):
         {"type": "assistant", "timestamp": "2026-08-11T05:00:00.000Z",
          "message": {"content": [{"type": "text", "text": "All tests pass."}]}},
         {"type": "assistant", "timestamp": "2026-08-11T05:01:00.000Z",
-         "message": {"content": [{"type": "text", "text": "Renamed a variable."}]}},
+         "message": {"content": [{"type": "text",
+                                   "text": "Renamed a variable in the passthrough helper."}]}},
     ]) + "\n", encoding="utf-8")
 
     payload = json.dumps({
@@ -304,6 +324,36 @@ def test_a_turn_with_no_claim_still_produces_no_output_at_all(tmp_path, capsys):
     })
     assert main(stdin_text=payload) == 0
     assert capsys.readouterr().out == ""
+
+
+def test_ratio_suffix_survives_summarize_session_raising(project, tmp_path, monkeypatch):
+    # The docstring's promise: a failure to compute statistics must never
+    # suppress the warning itself, even when the failure is an exception
+    # rather than a None return.
+    def boom(*args, **kwargs):
+        raise RuntimeError("synthetic summarize_session failure")
+
+    monkeypatch.setattr(hook, "summarize_session", boom)
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
+    assert code == 0
+    message = _message_of(out)
+    assert message is not None
+    assert "could not verify" in message.lower()
+
+
+def test_ratio_suffix_survives_render_raising(project, tmp_path, monkeypatch):
+    # Same guarantee, but the exception comes from stats.render() instead of
+    # from summarize_session() itself.
+    class BoomStats:
+        def render(self):
+            raise RuntimeError("synthetic render failure")
+
+    monkeypatch.setattr(hook, "summarize_session", lambda *a, **k: BoomStats())
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False)
+    assert code == 0
+    message = _message_of(out)
+    assert message is not None
+    assert "could not verify" in message.lower()
 
 
 def test_claim_check_verbose_is_gone(tmp_path):
