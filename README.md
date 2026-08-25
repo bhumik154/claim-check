@@ -158,7 +158,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 370 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 419 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 One example, from the comparison core:
 
@@ -218,7 +218,7 @@ The cases worth knowing about:
 
 **It isn't NLP.** It can't resolve tense or discourse. "Was at 15 passed, now 22/22" is genuinely ambiguous to a regex. Only one claim per message gets checked: the most specific kind, then the last one among ties. That covers a stale count corrected later, but a later sentence describing an earlier state can still slip through.
 
-**pytest only, for now.** vitest, jest and cargo test are a real gap, documented rather than silently unsupported.
+**pytest, vitest and jest only.** `cargo test`, `go test` and the rest are a real gap, documented rather than silently unsupported.
 
 **The Claude Code hook only sees commits made through the Bash tool**, since that's what carries a parseable command string. A commit through some other tool goes unchecked. In practice this hasn't been a gap, because the heredoc pattern for multi-line commit messages is bash syntax anyway.
 
