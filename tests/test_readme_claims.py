@@ -38,7 +38,15 @@ CURRENT_TAGLINE = (
 
 
 def test_every_syncable_fact_matches_the_code_today():
-    assert readme_facts._drift() == []
+    # Adding a test changes the case count, so this goes red on the commit
+    # that adds one. That is the intended cost. The message has to carry the
+    # remedy, because whoever hits this is in the middle of something else.
+    drift = readme_facts._drift()
+    assert drift == [], (
+        "The README no longer matches the code:\n  "
+        + "\n  ".join(drift)
+        + f"\n\nRun `{readme_facts.FIX_COMMAND}` to resync."
+    )
 
 
 def test_the_stop_hook_example_is_reproducible():
