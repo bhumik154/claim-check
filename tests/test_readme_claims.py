@@ -119,6 +119,18 @@ def test_a_stale_version_is_caught(tmp_path):
     assert rule.actual() != rule.expected
 
 
+def test_a_version_drift_report_admits_what_it_cannot_prove(sandbox, capsys):
+    # An install instruction names a git TAG. This check only compares against
+    # __version__, so between a release bump and its tag a synced README
+    # legitimately names a tag that does not exist. That window produced a
+    # broken install instruction at v0.5.0. The report has to say so, or it
+    # implies a guarantee it does not provide.
+    assert readme_facts.main([]) == 1
+    err = capsys.readouterr().err
+    assert readme_facts.VERSION_CAVEAT in err
+    assert "cannot prove the tag exists" in err
+
+
 # ---------------------------------------------- anchors fail loudly, never quietly
 
 

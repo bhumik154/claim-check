@@ -49,6 +49,17 @@ MARKETPLACE_MANIFEST = REPO / ".claude-plugin" / "marketplace.json"
 
 FIX_COMMAND = "python scripts/readme_facts.py --fix"
 
+# Install instructions name a GIT TAG. This check compares them against
+# __version__, which proves the repo agrees with itself and nothing more.
+# The version is bumped in the release commit and tagged afterwards, so a
+# synced README legitimately names a tag that does not exist yet. That
+# window is what produced a broken install instruction at v0.5.0.
+VERSION_CAVEAT = (
+    "this compares against __version__ only; it cannot prove the tag exists "
+    "on GitHub, and between a release bump and its tag it will name one that "
+    "does not yet"
+)
+
 # The test the README quotes verbatim, body and comments included.
 EMBEDDED_TEST_NAME = (
     "test_all_tests_pass_claim_with_zero_collected_tests_is_flagged_not_silently_matched"
@@ -161,7 +172,8 @@ def tagline_listing(readme: str) -> str:
     The README is its own source of truth here. `_PARSERS` in runners.py holds
     two parsers covering three runner names with no mapping between them, so
     there is nothing in the code to derive this from. The consequence is
-    stated in the spec: both sentences wrong together is undetectable.
+    recorded in docs/design/specs/2026-08-25-readme-self-verification-design.md:
+    both sentences wrong together is undetectable.
     """
     match = find_one(
         readme,
@@ -177,11 +189,17 @@ def tagline_listing(readme: str) -> str:
 class Rule:
     """One fact that lives in a document and can be rewritten in place."""
 
-    def __init__(self, name: str, path: Path, pattern: str, expected: str):
+    def __init__(
+        self, name: str, path: Path, pattern: str, expected: str, note: Optional[str] = None
+    ):
         self.name = name
         self.path = path
         self.pattern = pattern
         self.expected = expected
+        # Printed alongside a drift report. For facts whose check is weaker
+        # than it looks, so the reader is not left assuming more coverage
+        # than exists.
+        self.note = note
 
     def actual(self) -> str:
         text = self.path.read_text(encoding="utf-8")
@@ -203,9 +221,9 @@ def syncable_rules() -> List[Rule]:
     version = package_version()
     return [
         Rule("test-case count", README, r"has (\d+) cases", str(collected_test_count())),
-        Rule("README pre-commit rev", README, r"rev: v([\d.]+)", version),
-        Rule("README pip install ref", README, r"claim-check@v([\d.]+)", version),
-        Rule("example snippet rev", PRECOMMIT_SNIPPET, r"rev: v([\d.]+)", version),
+        Rule("README pre-commit rev", README, r"rev: v([\d.]+)", version, note=VERSION_CAVEAT),
+        Rule("README pip install ref", README, r"claim-check@v([\d.]+)", version, note=VERSION_CAVEAT),
+        Rule("example snippet rev", PRECOMMIT_SNIPPET, r"rev: v([\d.]+)", version, note=VERSION_CAVEAT),
         Rule(
             "runner listing (limitations bullet)",
             README,
@@ -318,7 +336,10 @@ def _drift() -> List[str]:
     for rule in syncable_rules():
         actual = rule.actual()
         if actual != rule.expected:
-            problems.append(f"{rule.name}: says {actual!r}, should be {rule.expected!r}")
+            problem = f"{rule.name}: says {actual!r}, should be {rule.expected!r}"
+            if rule.note:
+                problem += "\n    note: " + rule.note
+            problems.append(problem)
     return problems
 
 
