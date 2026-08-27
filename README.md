@@ -218,6 +218,8 @@ The cases worth knowing about:
 
 **It still doesn't know what "the full suite" means to you.** It knows when its own run was narrowed and abstains there, but directory-level narrowing and `testpaths` restrictions leave no trace in the output, so those go unnoticed. See the scope section above.
 
+**A claim written like output is ignored, including a true one.** Any line carrying both a count and a duration, `443 passed in 25.68s`, is treated as pasted runner output and dropped before anything is checked. So are fenced blocks, indented lines, blockquotes, and vitest or jest tallies. That is deliberate: quoting a summary line is not asserting it, and before the stripping existed roughly 3% of detections were an agent quoting its own test output back. The cost is real though. A genuine claim in that shape goes unchecked, and because the whole line is dropped, so does a real claim that happens to share a line with a pasted duration. It also means the cheapest way to slip a count past this tool is to format it like output. If you want a claim checked, write it as prose: "all 443 tests pass", not "443 passed in 25.68s".
+
 **It isn't NLP.** It can't resolve tense or discourse. "Was at 15 passed, now 22/22" is genuinely ambiguous to a regex. Only one claim per message gets checked: the most specific kind, then the last one among ties. That covers a stale count corrected later, but a later sentence describing an earlier state can still slip through.
 
 **pytest, vitest and jest only.** `cargo test`, `go test` and the rest are a real gap, documented rather than silently unsupported.
