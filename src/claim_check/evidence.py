@@ -39,6 +39,7 @@ from typing import Optional, Sequence
 from .models import PytestCounts, RunScope
 from .pytest_parser import bare_summary_lines, parse_summary_line
 from .runners import parse_test_output
+from .shell_parser import _stash_heredocs
 
 # Test results depend on state that mtimes cannot observe: environment
 # variables, database contents, installed package versions, the clock. Even
@@ -436,10 +437,16 @@ def shell_tokens(command) -> list:
     boundary. Checked against every pytest command in real transcripts: the
     only scope decisions that change are glued operators now read correctly.
 
+    Heredocs are set aside first, as the commit-message parser does: an
+    apostrophe in a heredoc body is not a quoting error, but the lexer reads
+    it as one, and every `pytest && git commit -F- <<'MSG'` with an "isn't"
+    in the message was unparseable and so never recorded.
+
     Returns [] for anything unparseable, which `is_scoped` reads as scoped.
     """
     if not isinstance(command, str):
         return []
+    command, _bodies, _unresolved = _stash_heredocs(command)
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True

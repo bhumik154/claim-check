@@ -488,6 +488,12 @@ def test_a_run_in_the_same_directory_still_wins_directly(workspace):
     # its redirect, or it leaks into the next command as a "test path".
     "grep -rn x src 2>/dev/null\npy -3 -m pytest -q",
     "python -m pytest -q > log.txt; cat log.txt",
+    # Also found by replay: an apostrophe in a heredoc commit message is not
+    # a quoting error, and must not make the whole line unparseable.
+    "python -m pytest -q 2>&1 | tail -1 && git commit -F- <<'MSG'\nit isn't done\nMSG",
+    # Valid bash, and the exact shape of this project's own commits: more
+    # commands on the heredoc's opening line.
+    "python -m pytest -q 2>&1 | tail -1 && git commit -F- <<'MSG' && git log -1\nit isn't done\nMSG",
 ])
 def test_a_whole_suite_run_stays_unscoped_whatever_follows_it(command):
     assert evidence.is_scoped(evidence.shell_tokens(command)) is False

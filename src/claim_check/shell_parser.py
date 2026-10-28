@@ -29,8 +29,12 @@ _HEREDOC_WRAPPED_RE = re.compile(
     r"(?P<body>.*?)\n(?P=delim)\s*\n?\s*\)",
     re.DOTALL,
 )
+# The rest of the opening line, `<<'MSG' && git log -1`, is ordinary shell
+# and is put back after the placeholder. Requiring the newline straight after
+# the delimiter left those heredocs unrecognised, so an apostrophe in the body
+# made the whole command unparseable.
 _HEREDOC_BARE_RE = re.compile(
-    r"<<-?\s*(?P<quote>['\"]?)(?P<delim>\w+)(?P=quote)\s*\n(?P<body>.*?)\n(?P=delim)\b",
+    r"<<-?\s*(?P<quote>['\"]?)(?P<delim>\w+)(?P=quote)(?P<rest>[^\n]*)\n(?P<body>.*?)\n(?P=delim)\b",
     re.DOTALL,
 )
 _UNRESOLVED_EXPANSION_RE = re.compile(r"\$\{|\$\(|\$[A-Za-z_]|`")
@@ -60,7 +64,7 @@ def _stash_heredocs(command: str):
         state["counter"] += 1
         key = f"\x00HEREDOC{state['counter']}\x00"
         placeholders[key] = body
-        return key
+        return key + (m.groupdict().get("rest") or "")
 
     # Wrapped form first: a bare heredoc pattern is a strict substring of
     # the wrapped one, so matching wrapped first prevents it from also
