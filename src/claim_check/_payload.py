@@ -44,6 +44,10 @@ _GIT_BASH_DRIVE_RE = re.compile(r"^/([A-Za-z])(?=/|$)")
 def _native_path(path: str) -> str:
     if os.name == "nt":
         path = _GIT_BASH_DRIVE_RE.sub(lambda m: m.group(1).upper() + ":", path)
+        if len(path) == 2 and path[1] == ":":
+            # "/c" alone is the root of the drive. Bare "C:" means the
+            # current folder on drive C instead, which is somewhere else.
+            path += os.sep
     return os.path.expanduser(path)
 
 
