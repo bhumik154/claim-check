@@ -466,3 +466,49 @@ def test_a_run_in_the_same_directory_still_wins_directly(workspace):
     evidence.record_run(workspace, "s1", "python -m pytest", PASSING_OUTPUT)
     evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
     assert evidence.load_fresh_nearby(workspace, "s1")["cwd"] == str(workspace)
+
+
+
+# --- shell_tokens: scope must survive operators glued to a word ------------
+#
+# shlex.split keeps "-q;" as one token, so in `pytest -q; echo exit=$?` the
+# echo looked like extra pytest arguments and the run was marked scoped,
+# which made it useless for a whole-suite claim. A punctuation-aware lexer
+# fixes that but splits `2>&1` into "2", ">&", "1", and the stray "2" then
+# looks like a test path. Both cases are pinned here.
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest -q; echo exit=$?",
+    "python -m pytest -q 2>&1 | tail -1",
+    'cd "/c/Claude Code/projects/x" && python -m pytest -q 2>&1 | tail -1 && ls',
+    "python -m pytest -q>out.txt",
+    "python -m pytest&&echo ok",
+    # Found by replaying real commands: the redirect target must stay with
+    # its redirect, or it leaks into the next command as a "test path".
+    "grep -rn x src 2>/dev/null\npy -3 -m pytest -q",
+    "python -m pytest -q > log.txt; cat log.txt",
+])
+def test_a_whole_suite_run_stays_unscoped_whatever_follows_it(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is False
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest -k slow; echo done",
+    "python -m pytest tests/unit&&echo ok",
+    "python -m pytest tests/unit 2>&1 | tail -1",
+])
+def test_a_narrowed_run_stays_scoped_whatever_follows_it(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is True
+
+
+def test_an_unparseable_command_has_no_tokens():
+    assert evidence.shell_tokens('python -m pytest "unbalanced') == []
+
+
+def test_a_quiet_run_with_a_trailing_echo_is_recorded_as_whole_suite(project):
+    record = evidence.record_run(
+        project, "s1", "python -m pytest -q; echo exit=$?", "....\n12 passed in 0.31s\nexit=0\n"
+    )
+    assert record is not None
+    assert record["scoped"] is False

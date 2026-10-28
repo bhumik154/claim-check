@@ -423,6 +423,47 @@ def _segment_narrowing_cause(runner: str, tokens: list):
     return None
 
 
+def shell_tokens(command) -> list:
+    """Tokens of a shell line, with operators split off even when glued on.
+
+    `shlex.split` keeps "-q;" as one token, so in `pytest -q; echo exit=$?`
+    the echo read as extra pytest arguments and the run was marked scoped.
+    A punctuation-aware lexer splits that correctly but turns `2>/dev/null`
+    into "2", ">", "/dev/null", and the stray pieces then read as test paths.
+    So a redirect is reassembled into one token, file descriptor and target
+    included ("2>/dev/null", "2>&1", ">log.txt"), which is what `shlex.split`
+    produced for the unglued case and what `_pytest_segments` treats as a
+    boundary. Checked against every pytest command in real transcripts: the
+    only scope decisions that change are glued operators now read correctly.
+
+    Returns [] for anything unparseable, which `is_scoped` reads as scoped.
+    """
+    if not isinstance(command, str):
+        return []
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        raw = list(lexer)
+    except ValueError:
+        return []
+    tokens = []
+    awaiting_target = False
+    for token in raw:
+        if awaiting_target:
+            tokens[-1] += token
+            awaiting_target = False
+            continue
+        if tokens and tokens[-1].isdigit() and token[:1] in "<>":
+            tokens[-1] += token
+        else:
+            tokens.append(token)
+        # bool() guard: `"" in "<>"` is True in Python, which made every
+        # bare number ("-n 2", "tail -1") swallow the token after it.
+        operator = tokens[-1].lstrip("0123456789")
+        awaiting_target = bool(operator) and (operator[0] in "<>" or operator.startswith("&>"))
+    return tokens
+
+
 def parse_run_output(stdout, command) -> Optional[PytestCounts]:
     """Counts from a shell command's output, or None if it was not a run.
 
@@ -443,10 +484,7 @@ def parse_run_output(stdout, command) -> Optional[PytestCounts]:
     if counts is not None:
         return counts
 
-    try:
-        tokens = shlex.split(command, posix=True) if isinstance(command, str) else []
-    except ValueError:
-        return None
+    tokens = shell_tokens(command)
     if not any(name == "pytest" for name, _segment in _pytest_segments(tokens)):
         return None
 
@@ -475,10 +513,7 @@ def record_run(
     if counts is None:
         return None
 
-    try:
-        argv = shlex.split(command, posix=True)
-    except ValueError:
-        argv = []
+    argv = shell_tokens(command)
 
     record = {
         "recorded_at": time.time(),

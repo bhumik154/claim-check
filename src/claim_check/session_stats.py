@@ -15,14 +15,12 @@ count a claim as backed that the live check would have rejected as stale.
 Naming the weaker thing that is actually measured keeps the sentence true.
 """
 
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
 from . import evidence
 from .conversation import extract_claims
-from .pytest_parser import parse_summary_line
 from .transcript import (
     DEFAULT_REPLAY_BUDGET_S, ReplayAborted, assistant_text, iter_records,
     record_timestamp,
@@ -141,7 +139,7 @@ def summarize_session(
         for record in iter_records(transcript_path, budget_s=budget):
             _register_commands(record, commands)
 
-            if _is_test_run(record):
+            if _is_test_run(record, commands):
                 saw_any_run = True
                 if not _run_was_scoped(record, commands):
                     saw_whole_suite = True
@@ -218,14 +216,35 @@ def _register_commands(record: dict, commands: dict) -> None:
             commands[block.get("id")] = command
 
 
-def _is_test_run(record: dict) -> bool:
+def _is_test_run(record: dict, commands: dict) -> bool:
+    """Whether this tool result holds a test run, judged as the evidence
+    store judges it.
+
+    Using the strict pytest-only parser here made the session ratio miss the
+    runs the store also used to miss (a quiet summary followed by other
+    output) and every vitest and jest run, then report those claims as
+    having no test run at all.
+    """
     result = record.get("toolUseResult")
     if not isinstance(result, dict):
         return False
     stdout = result.get("stdout")
     if not isinstance(stdout, str):
         return False
-    return parse_summary_line(stdout) is not None
+    return evidence.parse_run_output(stdout, _command_of(record, commands)) is not None
+
+
+def _command_of(record: dict, commands: dict) -> str:
+    """The Bash command that produced this tool result, or "".
+
+    A tool_result links to its call through message.content[].tool_use_id.
+    """
+    message = record.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), list):
+        for block in message["content"]:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return commands.get(block.get("tool_use_id"), "")
+    return ""
 
 
 def _run_was_scoped(record: dict, commands: dict) -> bool:
@@ -236,23 +255,11 @@ def _run_was_scoped(record: dict, commands: dict) -> bool:
     may back a whole-suite claim, and treating an unknown command as
     whole-suite would let a narrow run confirm a broad claim.
     """
-    message = record.get("message")
-    command = ""
-    if isinstance(message, dict) and isinstance(message.get("content"), list):
-        for block in message["content"]:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                command = commands.get(block.get("tool_use_id"), "")
-                break
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        # The command cannot be resolved at all. Treated as scoped, the
-        # conservative direction: an unrecognised command must not be able
-        # to back a whole-suite claim it was never shown to satisfy.
-        return True
+    tokens = evidence.shell_tokens(_command_of(record, commands))
     if not tokens:
-        # Same reasoning as above: no command to inspect means no basis to
-        # call this run whole-suite.
+        # No command found, or one that cannot be parsed. Treated as scoped,
+        # the conservative direction: a command nobody could inspect must not
+        # back a whole-suite claim it was never shown to satisfy.
         return True
     return evidence.is_scoped(tokens)
 

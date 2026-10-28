@@ -159,7 +159,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 480 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 494 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 This file is tested too. `scripts/readme_facts.py` pins the case count above, the version strings in the install instructions, and the supported-runner list, and it checks that the example messages below still regenerate from real code. Run `python scripts/readme_facts.py --fix` when a change makes one of them stale. It covers mechanical facts only: prose that quietly starts contradicting the code is still on a reviewer to catch.
 
