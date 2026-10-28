@@ -151,13 +151,23 @@ def collected_test_count() -> int:
         capture_output=True,
         text=True,
     )
-    match = re.search(r"(\d+) tests? collected", result.stdout)
-    if match is None:
+    # The summary is a line of its own, printed last. Searching the whole
+    # output found "3 tests collected" inside a TEST NAME first, and --fix
+    # wrote "has 3 cases" into the README while the check, reading the same
+    # wrong number, agreed with it. The very failure this project exists to
+    # catch: a quoted tally taken for the real one.
+    counts = [
+        int(found.group(1))
+        for line in result.stdout.splitlines()
+        for found in [re.match(r"^(\d+) tests? collected\b", line.strip())]
+        if found
+    ]
+    if not counts:
         raise AnchorMissing(
             "could not read a collected count from `pytest --collect-only -q`. "
             f"stdout tail: {result.stdout.strip()[-200:]!r}"
         )
-    return int(match.group(1))
+    return counts[-1]
 
 
 def package_version() -> str:
