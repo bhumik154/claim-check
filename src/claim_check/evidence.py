@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .models import PytestCounts, RunScope
+from .pytest_parser import bare_summary_lines, parse_summary_line
 from .runners import parse_test_output
 
 # Test results depend on state that mtimes cannot observe: environment
@@ -419,6 +420,39 @@ def _segment_narrowing_cause(runner: str, tokens: list):
     return None
 
 
+def parse_run_output(stdout, command) -> Optional[PytestCounts]:
+    """Counts from a shell command's output, or None if it was not a run.
+
+    The Bash tool hands over everything the command printed, not just
+    pytest's part. `pytest -q` prints its tally undecorated, and the strict
+    parser only trusts that form on the final line, so `pytest -q; echo
+    exit=$?` or `... && ls` lost the run entirely. Measured across real
+    sessions, 62 of 232 runs went unrecorded that way, silently.
+
+    A quiet summary that is not last is accepted only when two things hold.
+    The command must actually invoke pytest, so `cat old.log` holding a tally
+    is not mistaken for a run. And the output must hold exactly one
+    tally-shaped line: with several, there is no telling which belongs to this
+    project, and wrong evidence is worse than none because it can confirm a
+    false claim or contradict a true one.
+    """
+    counts = parse_test_output(stdout)
+    if counts is not None:
+        return counts
+
+    try:
+        tokens = shlex.split(command, posix=True) if isinstance(command, str) else []
+    except ValueError:
+        return None
+    if not any(name == "pytest" for name, _segment in _pytest_segments(tokens)):
+        return None
+
+    tallies = bare_summary_lines(stdout)
+    if len(tallies) != 1:
+        return None
+    return parse_summary_line(tallies[0] + "\n")
+
+
 def record_run(
     project_dir,
     session_id: str,
@@ -434,7 +468,7 @@ def record_run(
     Never raises. A failure to write evidence must not disturb the tool call
     being observed.
     """
-    counts = parse_test_output(stdout)
+    counts = parse_run_output(stdout, command)
     if counts is None:
         return None
 

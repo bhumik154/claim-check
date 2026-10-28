@@ -338,3 +338,70 @@ def test_the_command_and_the_extra_args_are_inspected_together():
 
     result = RunResult(0, "", "", None, None, argv=("tests/unit",), cwd=".", command="poetry run pytest")
     assert evidence.scope_of_run(result).narrowed is True
+
+
+# --- parse_run_output: quiet summaries followed by other output ------------
+#
+# `pytest -q` prints its tally undecorated, and that form is only trusted on
+# the last line of the output. That rule is right for pytest's own output,
+# but the Bash tool hands over the whole shell command's output, so anything
+# printed after pytest pushed the summary off the last line and the run was
+# silently never recorded. Measured across real sessions: 62 of 232 runs.
+
+from claim_check.evidence import parse_run_output  # noqa: E402
+
+# The exact output that went unrecorded on 2026-10-28.
+_OBSERVED_2026_10_28 = (
+    "## main...origin/main [ahead 71, behind 71]\n"
+    "1d63b0f Document that a claim formatted like output is ignored\n"
+    '  "version": "0.6.0",\n'
+    "443 passed in 9.40s\n"
+    "0.6.0\n"
+)
+_OBSERVED_COMMAND = (
+    'cd "/c/Claude Code/projects/claim-check" && git status -sb | head -1 && '
+    "python -m pytest -q 2>&1 | tail -1 && ls cache/"
+)
+
+
+def test_a_quiet_summary_followed_by_other_output_is_recorded():
+    counts = parse_run_output(_OBSERVED_2026_10_28, _OBSERVED_COMMAND)
+    assert counts is not None
+    assert counts.passed == 443
+
+
+def test_pytest_q_followed_by_an_exit_code_echo_is_recorded():
+    counts = parse_run_output("....\n12 passed in 0.31s\nexit=0\n", "pytest -q; echo exit=$?")
+    assert counts is not None and counts.passed == 12
+
+
+def test_a_stray_tally_is_not_evidence_when_the_command_never_ran_pytest():
+    # Without the command check, `cat notes.md` containing an old tally would
+    # be stored as a real run.
+    assert parse_run_output("notes\n12 passed in 0.31s\nmore notes\n", "cat notes.md") is None
+
+
+def test_several_quiet_tallies_not_on_the_last_line_are_ambiguous():
+    # Real case: one script running several separate scratch suites. Taking
+    # the last tally would store a scratch suite's result as this project's.
+    output = "22 passed in 0.02s\nok ACCEPT\n1 failed, 22 passed in 0.09s\nok BLOCK\n"
+    assert parse_run_output(output, "bash run_scenarios.sh && python -m pytest -q") is None
+
+
+def test_a_decorated_summary_with_trailing_output_is_unchanged():
+    output = "===== 7 passed in 1.00s =====\ndone\n"
+    counts = parse_run_output(output, "python -m pytest; echo done")
+    assert counts is not None and counts.passed == 7
+
+
+def test_a_quiet_summary_on_the_last_line_still_needs_no_command_match():
+    # Wrappers like `make test` are recognised from the output alone when the
+    # summary is last. Only the newly accepted case needs the command check.
+    counts = parse_run_output("....\n9 passed in 0.10s\n", "make test")
+    assert counts is not None and counts.passed == 9
+
+
+def test_record_run_stores_the_run_that_went_unrecorded(project):
+    record = evidence.record_run(project, "s1", _OBSERVED_COMMAND, _OBSERVED_2026_10_28)
+    assert record is not None
+    assert record["counts"]["passed"] == 443

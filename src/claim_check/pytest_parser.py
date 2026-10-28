@@ -112,6 +112,20 @@ def _classify_line(line: str):
     return kind, body, duration, stripped
 
 
+def bare_summary_lines(text: str) -> list:
+    """Every line shaped like a `pytest -q` tally, wherever it appears.
+
+    For callers that see a whole shell command's output rather than pytest's
+    alone, where the run's summary is not necessarily the final line. This
+    module still only TRUSTS the final one; deciding when an earlier one is
+    good enough belongs to the caller, which knows what command produced it.
+    """
+    if not isinstance(text, str):
+        return []
+    lines = (line.strip() for line in strip_ansi(text).splitlines())
+    return [line for line in lines if line and _BARE_SUMMARY_RE.match(line)]
+
+
 def _classify_final_undecorated_line(text: str):
     """Returns (kind, body, duration_s, raw_line) for a trailing `pytest -q`
     tally, or None.
