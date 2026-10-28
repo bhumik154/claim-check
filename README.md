@@ -50,7 +50,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.6.0
+    rev: v0.6.1
     hooks:
       - id: claim-check
 ```
@@ -66,7 +66,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.6.0
+pip install git+https://github.com/bhumik154/claim-check@v0.6.1
 ```
 
 ```bash
@@ -211,6 +211,9 @@ The cases worth knowing about:
 | A runner whose own stated total disagrees with the parts | Rejected outright. Both JS runners state their total, so an unrecognised label makes the arithmetic disagree, and disagreement returns nothing rather than an undercount |
 | `npm test`, `yarn test`, `make test` | Marked scoped. They may run everything, but the runner and its arguments are hidden, and unknown scope is never usable as whole-suite evidence |
 | `npx jest -t login`, `npx vitest run --changed`, `npx jest --onlyChanged` | Marked scoped, per each runner's own narrowing flags |
+| `pytest -q; echo exit=$?`, `pytest -q && git status`, captured from real sessions | Recorded. A quiet summary followed by other output used to be dropped silently, about a quarter of real runs. It now counts when the command ran pytest and the output holds exactly one tally; several mean separate suites ran, and that is refused rather than guessed |
+| `cd project && pytest`, then a claim made from the parent folder | The run is filed under `project` and found from a folder above or below it. Fresh runs in two projects under the same folder leave the claim unverified, never checked against the wrong suite. The commit hook also runs its suite in `project`: from the parent it used to collect every project there, hit collection errors, and deny a true claim |
+| `pytest -q;echo`, `2>/dev/null` before pytest, a heredoc commit message containing an apostrophe | Scope still read correctly. Each of these used to make a whole-suite run look narrowed or unparseable |
 | A nonexistent `--cwd`, an unbalanced quote in `--command`, a malformed hook payload | All fail open with a specific reason. Every entry point also has a catch-all, so no internal error can block a commit |
 
 ## What this is not
