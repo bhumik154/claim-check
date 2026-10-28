@@ -58,18 +58,20 @@ def _note(message: str) -> str:
 
 def _cause_sentence(record) -> str:
     if record is None:
-        # `load_fresh_nearby` collapses five distinct reasons into this one
-        # None: no record at all, a malformed record, a TTL expiry, a
-        # fingerprint mismatch, or fresh runs in more than one nested project
-        # with no way to tell which one the claim is about. In the TTL and
-        # ambiguous cases a whole-suite run really was recorded this session,
-        # so the sentence must not deny that a run exists; it can only say
-        # none is usable, without claiming to know which reason is why.
+        # `load_fresh_nearby` collapses six distinct reasons into this one
+        # None: no record for this project, a malformed record, a TTL expiry,
+        # a fingerprint mismatch, fresh runs in more than one project with no
+        # way to tell which one the claim is about, or a run that belongs to
+        # a nested project rather than this one. In several of those a
+        # whole-suite run really was recorded this session, so the sentence
+        # must not deny that a run exists; it can only say none is usable for
+        # this project, without claiming to know which reason is why.
         return (
             "No usable whole-suite test run for this claim: either none was "
-            "recorded in this session, or the most recent one is too old, unreadable, "
-            "or recorded against a different state of the tree, or runs in more than "
-            "one project leave it unclear which one the claim is about."
+            "recorded for this project in this session, or the most recent one is "
+            "too old, unreadable, or recorded against a different state of the tree, "
+            "or runs in more than one project leave it unclear which one the claim "
+            "is about."
         )
     return "The most recent test run recorded in this session was narrowed, so it covered less than the whole suite."
 

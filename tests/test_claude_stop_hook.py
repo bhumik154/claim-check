@@ -384,3 +384,23 @@ def test_runs_in_two_projects_are_reported_as_ambiguous_not_as_missing(project, 
     message = _message_of(out)
     assert message is not None and "could not verify" in message
     assert "more than one project" in message
+
+
+
+def test_a_nested_projects_run_is_reported_as_unverifiable_not_held_against_the_claim(tmp_path, monkeypatch):
+    # Smoke test of 0.6.1: a repo with 6 tests holds a demo project with 2.
+    # Only the demo ran, and a true "All 6 tests pass" from the repo root was
+    # reported as "actual total is 2". It is unverified, not false. And since
+    # a run WAS recorded, the cause must not say none was.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    repo = tmp_path / "repo"
+    demo = repo / "examples" / "demo"
+    demo.mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("", encoding="utf-8")
+    (demo / "pyproject.toml").write_text("", encoding="utf-8")
+    evidence.record_run(demo, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(repo, tmp_path, "Done. All 6 tests pass.", record=False)
+    message = _message_of(out)
+    assert message is not None and "could not verify" in message
+    assert "none was recorded for this project" in message

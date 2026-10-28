@@ -583,6 +583,34 @@ def load_fresh(
     return record
 
 
+# A folder holding any of these is a project of its own. Deliberately broad:
+# misreading a plain folder as a project only makes a lookup more cautious.
+_PROJECT_MARKERS = ("pyproject.toml", "pytest.ini", "setup.cfg", "setup.py", "tox.ini", "package.json")
+
+
+def project_root(path) -> Optional[Path]:
+    """The project `path` belongs to, or None when it is in no project.
+
+    The nearest folder at or above `path` that holds a test or package config
+    file, or is the top of a git repository. Smoke-testing 0.6.1 showed why
+    "the folder a command cd'd into" is not good enough on its own: the
+    commit hook ran pytest in `docs/`, found no tests and denied a true
+    claim, and a nested demo project's run was held against a claim about
+    the project around it.
+    """
+    try:
+        here = Path(path).resolve()
+    except (OSError, ValueError, TypeError):
+        return None
+    for folder in (here, *here.parents):
+        try:
+            if (folder / ".git").exists() or any((folder / m).is_file() for m in _PROJECT_MARKERS):
+                return folder
+        except OSError:
+            return None
+    return None
+
+
 def load_fresh_nearby(cwd, session_id: str, now: Optional[float] = None) -> Optional[dict]:
     """Fresh evidence for `cwd`, or for one project nested with it.
 
@@ -609,6 +637,13 @@ def load_fresh_nearby(cwd, session_id: str, now: Optional[float] = None) -> Opti
     except (OSError, ValueError):
         return None
 
+    # Inside a project, only that project's own runs count. A nested project
+    # (a demo or fixture with its own config) is a different suite, and its
+    # result held against a claim about this one is a false accusation.
+    # Outside any project, as in a folder that merely holds several, a run in
+    # one project below is still allowed, subject to the exactly-one rule.
+    home = project_root(here)
+
     found = {}
     for path in candidates:
         try:
@@ -617,6 +652,8 @@ def load_fresh_nearby(cwd, session_id: str, now: Optional[float] = None) -> Opti
         except (OSError, ValueError, KeyError, TypeError):
             continue
         if not (_contains(here, there) or _contains(there, here)):
+            continue
+        if home is not None and project_root(there) != home:
             continue
         record = load_fresh(there, session_id, now=now)
         if record is not None:

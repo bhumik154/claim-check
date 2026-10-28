@@ -518,3 +518,67 @@ def test_a_quiet_run_with_a_trailing_echo_is_recorded_as_whole_suite(project):
     )
     assert record is not None
     assert record["scoped"] is False
+
+
+
+# --- project_root: what "the project" is --------------------------------
+#
+# Found by smoke-testing 0.6.1: running the commit hook's suite in the folder
+# a command cd'd into made `cd docs && git commit -m "6 passed"` run pytest
+# in docs/, find no tests, and DENY a true claim. And looking for evidence in
+# any nested folder let a nested demo project's 2-test run be held against a
+# claim about the 6-test project around it.
+
+
+def _mkproject(path, marker="pyproject.toml"):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / marker).write_text("", encoding="utf-8")
+    return path
+
+
+def test_a_folder_with_a_config_file_is_its_own_project_root(tmp_path):
+    repo = _mkproject(tmp_path / "repo")
+    assert evidence.project_root(repo) == repo.resolve()
+
+
+def test_a_plain_subfolder_belongs_to_the_project_above_it(tmp_path):
+    repo = _mkproject(tmp_path / "repo")
+    (repo / "docs" / "deep").mkdir(parents=True)
+    assert evidence.project_root(repo / "docs" / "deep") == repo.resolve()
+
+
+def test_a_nested_project_is_its_own_root(tmp_path):
+    repo = _mkproject(tmp_path / "repo")
+    demo = _mkproject(repo / "examples" / "demo")
+    assert evidence.project_root(demo) == demo.resolve()
+
+
+def test_the_top_of_a_git_repository_is_a_project_root(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pkg").mkdir()
+    assert evidence.project_root(repo / "pkg") == repo.resolve()
+
+
+def test_a_folder_outside_any_project_has_no_root(tmp_path):
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    if evidence.project_root(tmp_path) is None:
+        assert evidence.project_root(loose) is None
+
+
+def test_a_nested_projects_run_is_not_evidence_for_the_project_around_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    repo = _mkproject(tmp_path / "repo")
+    demo = _mkproject(repo / "examples" / "demo")
+    evidence.record_run(demo, "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(repo, "s1") is None
+
+
+def test_a_run_in_a_plain_subfolder_of_the_same_project_is_still_found(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    repo = _mkproject(tmp_path / "repo")
+    (repo / "src").mkdir()
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    evidence.record_run(repo / "src", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(repo, "s1") is not None
