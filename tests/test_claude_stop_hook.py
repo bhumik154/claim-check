@@ -388,7 +388,7 @@ def test_runs_in_two_projects_are_reported_as_ambiguous_not_as_missing(project, 
 
 
 def test_a_nested_projects_run_is_reported_as_unverifiable_not_held_against_the_claim(tmp_path, monkeypatch):
-    # Smoke test of 0.6.1: a repo with 6 tests holds a demo project with 2.
+    # Smoke test of 0.7.0 before release: a repo with 6 tests holds a demo project with 2.
     # Only the demo ran, and a true "All 6 tests pass" from the repo root was
     # reported as "actual total is 2". It is unverified, not false. And since
     # a run WAS recorded, the cause must not say none was.

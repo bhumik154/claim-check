@@ -707,7 +707,7 @@ def project_root(path) -> Optional[Path]:
     """The project `path` belongs to, or None when it is in no project.
 
     The nearest folder at or above `path` that holds a test or package config
-    file, or is the top of a git repository. Smoke-testing 0.6.1 showed why
+    file, or is the top of a git repository. Smoke-testing this release before it shipped showed why
     "the folder a command cd'd into" is not good enough on its own: the
     commit hook ran pytest in `docs/`, found no tests and denied a true
     claim, and a nested demo project's run was held against a claim about

@@ -7,6 +7,6 @@
 
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.6.1
+    rev: v0.7.0
     hooks:
       - id: claim-check

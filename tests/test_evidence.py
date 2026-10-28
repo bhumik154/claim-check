@@ -523,7 +523,7 @@ def test_a_quiet_run_with_a_trailing_echo_is_recorded_as_whole_suite(project):
 
 # --- project_root: what "the project" is --------------------------------
 #
-# Found by smoke-testing 0.6.1: running the commit hook's suite in the folder
+# Found by smoke-testing 0.7.0 before release: running the commit hook's suite in the folder
 # a command cd'd into made `cd docs && git commit -m "6 passed"` run pytest
 # in docs/, find no tests, and DENY a true claim. And looking for evidence in
 # any nested folder let a nested demo project's 2-test run be held against a
@@ -587,7 +587,7 @@ def test_a_run_in_a_plain_subfolder_of_the_same_project_is_still_found(tmp_path,
 
 # --- the relaxed path must not take a tally some other command printed ----
 #
-# Smoke test of 0.6.1: "the command mentions pytest and the output holds one
+# Smoke test of 0.7.0 before release: "the command mentions pytest and the output holds one
 # tally" did not prove the tally came from pytest. A crashed pytest followed
 # by `cat last_run.log` recorded the old log's count as this run, unscoped,
 # where it could confirm a false claim or contradict a true one.
@@ -640,7 +640,7 @@ def test_a_genuine_run_followed_by_harmless_output_is_still_recorded(command):
 
 # --- redirects and line breaks ---------------------------------------------
 #
-# Smoke test of 0.6.1, already true of 0.6.0: a redirect was read as the end
+# Smoke test of 0.7.0 before release, already true of 0.6.0: a redirect was read as the end
 # of the command, so test paths written after it were ignored and a narrowed
 # run looked like the whole suite. Bash allows arguments after a redirect.
 # And a line break is a command separator, unless it is a line continuation.

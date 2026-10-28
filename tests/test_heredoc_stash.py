@@ -1,6 +1,6 @@
 """Heredoc stashing: fast, and identical to the regex it replaces.
 
-Smoke-testing 0.6.1 found the heredoc pattern quadratic: for every `<<` it
+Smoke-testing 0.7.0 before release found the heredoc pattern quadratic: for every `<<` it
 searched forward through the rest of the command for a terminator line. A
 command with many `<<` and no terminator took 5.5 s, up from 41 ms in 0.6.0,
 and this runs on every Bash command the commit hook sees.

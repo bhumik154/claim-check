@@ -422,7 +422,7 @@ def test_a_commit_after_cd_runs_the_suite_in_that_directory(monkeypatch, tmp_pat
 
 
 def test_a_commit_from_a_subfolder_runs_the_suite_at_the_project_root(monkeypatch, tmp_path):
-    # Found by smoke-testing 0.6.1: `cd docs && git commit -m "6 passed"` ran
+    # Found by smoke-testing 0.7.0 before release: `cd docs && git commit -m "6 passed"` ran
     # pytest in docs/, found no tests, and denied a true claim.
     repo = tmp_path / "repo"
     (repo / "docs").mkdir(parents=True)

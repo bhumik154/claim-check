@@ -262,7 +262,7 @@ def test_fix_refuses_entirely_when_an_anchor_is_missing(sandbox, capsys):
 
 
 def test_the_collected_count_is_read_from_the_summary_not_from_a_test_name(monkeypatch):
-    # Found smoke-testing 0.6.1: a test named after the input
+    # Found smoke-testing 0.7.0 before release: a test named after the input
     # "3 tests collected in 0.01s" made the first match in --collect-only
     # output 3, and --fix wrote "has 3 cases" into the README. The check did
     # not object, because the README and the check read the same wrong

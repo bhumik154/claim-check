@@ -53,7 +53,7 @@ def test_a_git_bash_drive_path_is_understood_on_windows(tmp_path):
 
 @pytest.mark.skipif(os.name != "nt", reason="Git Bash drive paths only exist on Windows")
 def test_a_bare_git_bash_drive_means_the_drive_root(tmp_path):
-    # Smoke test of 0.6.1: "/c" became "C:", which Windows reads as "the
+    # Smoke test of 0.7.0 before release: "/c" became "C:", which Windows reads as "the
     # current folder on drive C", not the root of the drive.
     drive = os.path.splitdrive(str(tmp_path))[0]
     result = effective_dir(_payload(tmp_path), f"cd /{drive[0].lower()} && pytest")
