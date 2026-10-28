@@ -164,6 +164,63 @@ def _iter_message_values(tokens: list):
         i += 1
 
 
+_SHELL_PUNCTUATION = "();<>|&\n"
+
+
+def shell_tokens(command) -> list:
+    """Tokens of a shell line, with operators split off even when glued on.
+
+    `shlex.split` keeps "-q;" as one token, so in `pytest -q; echo exit=$?`
+    the echo read as extra pytest arguments and the run was marked scoped. A
+    punctuation-aware lexer splits that correctly, with three repairs:
+
+    - Redirects are reassembled into one token, file descriptor and target
+      included ("2>/dev/null", "2>&1", ">log.txt"). Split apart, the pieces
+      read as test paths. (Checked: `"" in "<>"` is True in Python, hence the
+      bool() guard below, or every bare number swallows the next token.)
+    - A line break is a command separator, as in the shell, so `cd x` and
+      `pytest` on separate lines are two commands, reported as ";". A line
+      continuation, backslash then newline, is joined first: splitting there
+      would detach `-q tests/unit` from `pytest` and make a narrowed run look
+      like the whole suite.
+    - Heredocs are set aside first: an apostrophe in a heredoc body is not a
+      quoting error, but the lexer reads it as one.
+
+    Returns [] for anything unparseable, which `is_scoped` reads as scoped.
+    """
+    if not isinstance(command, str):
+        return []
+    command, _bodies, _unresolved = _stash_heredocs(command)
+    command = command.replace("\\\r\n", " ").replace("\\\n", " ")
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        raw = list(lexer)
+    except ValueError:
+        return []
+    tokens = []
+    awaiting_target = False
+    for token in raw:
+        if "\n" in token and set(token) <= set(_SHELL_PUNCTUATION):
+            # A newline on its own separates commands; after an operator
+            # ("&&\n", "|\n") the operator already does.
+            tokens.append(token.replace("\n", "") or ";")
+            awaiting_target = False
+            continue
+        if awaiting_target:
+            tokens[-1] += token
+            awaiting_target = False
+            continue
+        if tokens and tokens[-1].isdigit() and token[:1] in "<>":
+            tokens[-1] += token
+        else:
+            tokens.append(token)
+        operator = tokens[-1].lstrip("0123456789")
+        awaiting_target = bool(operator) and (operator[0] in "<>" or operator.startswith("&>"))
+    return tokens
+
+
 def leading_cd_target(command: str) -> Optional[str]:
     """The directory a command moves into before doing anything else.
 
@@ -178,15 +235,7 @@ def leading_cd_target(command: str) -> Optional[str]:
     """
     if not isinstance(command, str) or not command.strip():
         return None
-    stashed_command, _heredocs, _unresolved = _stash_heredocs(command)
-    try:
-        lexer = shlex.shlex(stashed_command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        return None
-
-    segments = _split_into_segments(tokens)
+    segments = _split_into_segments(shell_tokens(command))
     if not segments:
         return None
     first = segments[0]

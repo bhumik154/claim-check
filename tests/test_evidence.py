@@ -582,3 +582,96 @@ def test_a_run_in_a_plain_subfolder_of_the_same_project_is_still_found(tmp_path,
     (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
     evidence.record_run(repo / "src", "s1", "python -m pytest", PASSING_OUTPUT)
     assert evidence.load_fresh_nearby(repo, "s1") is not None
+
+
+
+# --- the relaxed path must not take a tally some other command printed ----
+#
+# Smoke test of 0.6.1: "the command mentions pytest and the output holds one
+# tally" did not prove the tally came from pytest. A crashed pytest followed
+# by `cat last_run.log` recorded the old log's count as this run, unscoped,
+# where it could confirm a false claim or contradict a true one.
+
+_LOG_WITH_A_TALLY = "old notes\n100 passed in 3.00s\nmore notes\n"
+_CRASH = "INTERNALERROR> Traceback (most recent call last):\nINTERNALERROR> boom\n"
+
+
+@pytest.mark.parametrize("command, output", [
+    ("python -m pytest -q; cat last_run.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("cat last_run.log; python -m pytest -q", _LOG_WITH_A_TALLY + _CRASH),
+    ("python -m pytest -q; head -20 old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("python -m pytest -q; type old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("python -m pytest -q; grep passed old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("python -m pytest -q; grep -v DEBUG old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ('python -m pytest -q; echo "100 passed in 3.00s"', _CRASH + "100 passed in 3.00s\n"),
+    ("python -m pytest -q && git show HEAD", _CRASH + _LOG_WITH_A_TALLY),
+    ("echo pytest; cat old.log", _LOG_WITH_A_TALLY),
+    ("pip install pytest && cat old.log", _LOG_WITH_A_TALLY),
+    ("python -m pytest -q --co; python report.py", "3 tests collected in 0.01s\n" + _LOG_WITH_A_TALLY),
+])
+def test_a_tally_another_command_could_have_printed_is_not_this_run(command, output):
+    assert parse_run_output(output, command) is None
+
+
+@pytest.mark.parametrize("command", [
+    # The run that went unrecorded on 2026-10-28 and started this fix. Its
+    # grep pattern cannot match a tally line, so it cannot have printed one.
+    'cd "/c/Claude Code/projects/claim-check" && git log --oneline -5 && '
+    "grep '\"version\"' .claude-plugin/plugin.json && python -m pytest -q 2>&1 | tail -1 && ls cache/",
+    "python -m pytest -q; echo exit=$?",
+    "python -m pytest -q && git log --oneline -1",
+    "uv run pytest -q; echo done",
+    ".venv/Scripts/python.exe -m pytest -q; echo done",
+    "FOO=1 python -m pytest -q; echo done",
+    "py -3 -m pytest -q; echo done",
+    # Found replaying real sessions after tightening: these print nothing a
+    # tally could come from, and refusing them cost real evidence.
+    "cat >> notes.md <<'EOF'\nsome notes\nEOF\npython -m pytest -q; echo done",
+    "sed -i 's/a/b/' src/x.py && python -m pytest -q; echo done",
+    "grep -c passed old.log; python -m pytest -q; echo done",
+    "echo '=== expect 2 passed ===' && python -m pytest -q; echo done",
+])
+def test_a_genuine_run_followed_by_harmless_output_is_still_recorded(command):
+    output = '  "version": "0.6.0",\n12 passed in 0.31s\nsome trailing output\n'
+    counts = parse_run_output(output, command)
+    assert counts is not None and counts.passed == 12
+
+
+
+# --- redirects and line breaks ---------------------------------------------
+#
+# Smoke test of 0.6.1, already true of 0.6.0: a redirect was read as the end
+# of the command, so test paths written after it were ignored and a narrowed
+# run looked like the whole suite. Bash allows arguments after a redirect.
+# And a line break is a command separator, unless it is a line continuation.
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest -q > out.txt tests/unit",
+    "python -m pytest -q >| out.txt tests/unit",
+    "python -m pytest -q &>> log tests/unit",
+    "python -m pytest -q <<< 'x' tests/unit",
+    "python -m pytest -q <(echo tests/unit)",
+    "python -m pytest -q 2>/dev/null tests/unit",
+    "python -m pytest \\\n  -q tests/unit",
+])
+def test_test_paths_after_a_redirect_or_a_continuation_still_narrow_the_run(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is True
+
+
+@pytest.mark.parametrize("command", [
+    "cd x\npython -m pytest -q",
+    "python -m pytest -q\necho done",
+    "git status\n\npython -m pytest -q 2>&1 | tail -1\necho done",
+    "python -m pytest \\\n  -q",
+])
+def test_a_line_break_separates_commands(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is False
+
+
+def test_a_declared_command_with_a_redirect_keeps_its_scope():
+    # scope_of_run tokenizes a declared --command with shlex.split, where a
+    # bare ">" and its target are separate tokens. The target is not a path.
+    import shlex
+    assert evidence.is_scoped(shlex.split("python -m pytest -q > log.txt")) is False
+    assert evidence.is_scoped(shlex.split("python -m pytest -q > log.txt tests/unit")) is True

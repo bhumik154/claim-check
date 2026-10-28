@@ -174,3 +174,8 @@ def test_a_leading_cd_names_the_directory_the_command_runs_in(command, expected)
 ])
 def test_anything_but_a_plain_leading_cd_gives_no_target(command):
     assert leading_cd_target(command) is None
+
+
+
+def test_a_cd_on_its_own_line_is_still_a_leading_cd():
+    assert leading_cd_target("cd proj\npython -m pytest -q") == "proj"

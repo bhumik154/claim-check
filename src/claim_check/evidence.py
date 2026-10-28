@@ -29,6 +29,7 @@ telling the truth.
 
 import hashlib
 import json
+import re
 import os
 import shlex
 import tempfile
@@ -39,7 +40,7 @@ from typing import Optional, Sequence
 from .models import PytestCounts, RunScope
 from .pytest_parser import bare_summary_lines, parse_summary_line
 from .runners import parse_test_output
-from .shell_parser import _stash_heredocs
+from .shell_parser import shell_tokens  # noqa: F401  re-exported
 
 # Test results depend on state that mtimes cannot observe: environment
 # variables, database contents, installed package versions, the clock. Even
@@ -113,6 +114,10 @@ _VALUE_TAKING_FLAGS = frozenset(
 )
 
 _SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", "|&"})
+
+# Any redirection, with or without its target attached: ">", ">>f", "2>&1",
+# "&>log", ">|f", "<in", "<<<word", "<(" (process substitution).
+_REDIRECT = re.compile(r"^(?:\d*|&)(?:>>|>&|>\||>|<<<|<<|<&|<>|<)")
 
 _RUNNER_TOKENS = frozenset({"python", "python3", "py", "-m", "pytest", "py.test", "poetry", "hatch", "run", "uv", "pipenv", "exec"})
 
@@ -271,18 +276,24 @@ def _pytest_segments(tokens: Sequence[str]) -> list:
     which silently makes the entire evidence store unusable.
     """
     segments = [[]]
+    # A redirect is dropped, not treated as the end of the command: bash
+    # allows arguments after one, and `pytest -q > out.txt tests/unit` is a
+    # narrowed run. Ending the segment at ">" hid "tests/unit" and made it
+    # look like the whole suite. A bare operator from shlex.split (">" then
+    # "out.txt") drops its target too, so the file name is not a test path.
+    skip_target = False
     for token in tokens:
-        if (
-            token in _SHELL_OPERATORS
-            or token.startswith(">")
-            or token.startswith("<")
-            or token.startswith("2>")
-            or token.startswith("1>")
-            or token.startswith("&>")
-        ):
+        if skip_target:
+            skip_target = False
+            continue
+        if token in _SHELL_OPERATORS:
             segments.append([])
-        else:
-            segments[-1].append(token)
+            continue
+        redirect = _REDIRECT.match(token)
+        if redirect:
+            skip_target = redirect.end() == len(token)
+            continue
+        segments[-1].append(token)
 
     found = []
     for segment in segments:
@@ -424,53 +435,6 @@ def _segment_narrowing_cause(runner: str, tokens: list):
     return None
 
 
-def shell_tokens(command) -> list:
-    """Tokens of a shell line, with operators split off even when glued on.
-
-    `shlex.split` keeps "-q;" as one token, so in `pytest -q; echo exit=$?`
-    the echo read as extra pytest arguments and the run was marked scoped.
-    A punctuation-aware lexer splits that correctly but turns `2>/dev/null`
-    into "2", ">", "/dev/null", and the stray pieces then read as test paths.
-    So a redirect is reassembled into one token, file descriptor and target
-    included ("2>/dev/null", "2>&1", ">log.txt"), which is what `shlex.split`
-    produced for the unglued case and what `_pytest_segments` treats as a
-    boundary. Checked against every pytest command in real transcripts: the
-    only scope decisions that change are glued operators now read correctly.
-
-    Heredocs are set aside first, as the commit-message parser does: an
-    apostrophe in a heredoc body is not a quoting error, but the lexer reads
-    it as one, and every `pytest && git commit -F- <<'MSG'` with an "isn't"
-    in the message was unparseable and so never recorded.
-
-    Returns [] for anything unparseable, which `is_scoped` reads as scoped.
-    """
-    if not isinstance(command, str):
-        return []
-    command, _bodies, _unresolved = _stash_heredocs(command)
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        raw = list(lexer)
-    except ValueError:
-        return []
-    tokens = []
-    awaiting_target = False
-    for token in raw:
-        if awaiting_target:
-            tokens[-1] += token
-            awaiting_target = False
-            continue
-        if tokens and tokens[-1].isdigit() and token[:1] in "<>":
-            tokens[-1] += token
-        else:
-            tokens.append(token)
-        # bool() guard: `"" in "<>"` is True in Python, which made every
-        # bare number ("-n 2", "tail -1") swallow the token after it.
-        operator = tokens[-1].lstrip("0123456789")
-        awaiting_target = bool(operator) and (operator[0] in "<>" or operator.startswith("&>"))
-    return tokens
-
-
 def parse_run_output(stdout, command) -> Optional[PytestCounts]:
     """Counts from a shell command's output, or None if it was not a run.
 
@@ -480,25 +444,176 @@ def parse_run_output(stdout, command) -> Optional[PytestCounts]:
     exit=$?` or `... && ls` lost the run entirely. Measured across real
     sessions, 62 of 232 runs went unrecorded that way, silently.
 
-    A quiet summary that is not last is accepted only when two things hold.
-    The command must actually invoke pytest, so `cat old.log` holding a tally
-    is not mistaken for a run. And the output must hold exactly one
+    A quiet summary that is not last is accepted only when pytest was
+    genuinely launched, as a real test run, and the output holds exactly one
     tally-shaped line: with several, there is no telling which belongs to this
     project, and wrong evidence is worse than none because it can confirm a
     false claim or contradict a true one.
+
+    Whichever way a tally is found, when the line launches pytest nothing
+    else in it may be able to have printed that tally. Smoke testing found
+    `python -m pytest -q; cat last_run.log`, with pytest crashing before its
+    summary, recording the old log's count as this run, and the same held in
+    0.6.0 whenever the log's tally happened to be its last line. A line that
+    launches no pytest is still read on its merits, so `make test` works; its
+    record is marked scoped and never used for a verdict.
     """
+    pipelines = _pipelines(shell_tokens(command))
+    launch = [p for p in pipelines if any(_launches_pytest(stage) for stage in p)]
+
     counts = parse_test_output(stdout)
     if counts is not None:
+        if launch and _another_command_could_print(pipelines, launch, counts.raw_summary_line):
+            return None
         return counts
 
-    tokens = shell_tokens(command)
-    if not any(name == "pytest" for name, _segment in _pytest_segments(tokens)):
-        return None
-
     tallies = bare_summary_lines(stdout)
-    if len(tallies) != 1:
+    if len(tallies) != 1 or not launch:
+        return None
+    if any(flag in stage for p in launch for stage in p for flag in _NOT_A_TEST_RUN):
+        return None
+    if _another_command_could_print(pipelines, launch, tallies[0]):
         return None
     return parse_summary_line(tallies[0] + "\n")
+
+
+def _another_command_could_print(pipelines, launch, line) -> bool:
+    """Whether something other than the pytest launch could have printed `line`.
+
+    Only the first command of a pipeline introduces text; those after a `|`
+    filter what it printed, so `git status | head -1` cannot produce a tally.
+    `echo` and friends are the exception, since they ignore their input.
+    """
+    for pipeline in pipelines:
+        if pipeline in launch:
+            continue
+        if _could_print(pipeline[0], line):
+            return True
+        for stage in pipeline[1:]:
+            if _program(stage)[0] in _ECHOERS and _could_print(stage, line):
+                return True
+    return False
+
+
+# Printing a file or a commit can reproduce an old tally verbatim.
+_FILE_PRINTERS = frozenset({
+    "cat", "tac", "type", "head", "tail", "less", "more", "bat", "sed", "awk", "gawk",
+    "get-content", "gc", "jq", "strings",
+})
+_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "findstr", "select-string", "sls"})
+_ECHOERS = frozenset({"echo", "printf", "write-output", "write-host"})
+_SEARCH_PRINTS_NO_LINES = frozenset({
+    "--count", "--files-with-matches", "--files-without-match", "--quiet", "--silent",
+})
+# Sends standard output into a file: `>f`, `>>f`, `1>f`, `&>f`. Not `>&2`,
+# which only moves it to standard error.
+_STDOUT_TO_FILE = re.compile(r"^(?:1?>>?|&>>?)(?!&)\S")
+_PYTHONS = frozenset({"python", "python3", "py"})
+_RUNNER_WRAPPERS = frozenset({"poetry", "hatch", "uv", "pipenv", "pdm", "rye"})
+_NOT_A_TEST_RUN = frozenset({
+    "--co", "--collect-only", "--version", "-V", "-h", "--help", "--fixtures", "--markers",
+})
+_PIPELINE_SEPARATORS = frozenset({";", "&&", "||", "&", "(", ")"})
+
+
+def _pipelines(tokens) -> list:
+    """Splits tokens into pipelines, each a list of stages (lists of tokens)."""
+    pipelines, stages, stage = [], [], []
+    for token in tokens:
+        if token in _PIPELINE_SEPARATORS:
+            stages.append(stage)
+            pipelines.append([s for s in stages if s])
+            stages, stage = [], []
+        elif token in ("|", "|&"):
+            stages.append(stage)
+            stage = []
+        else:
+            stage.append(token)
+    stages.append(stage)
+    pipelines.append([s for s in stages if s])
+    return [p for p in pipelines if p]
+
+
+def _program(stage) -> tuple:
+    """(program name, its arguments), skipping leading VAR=value assignments."""
+    i = 0
+    while i < len(stage) and "=" in stage[i] and not stage[i].startswith("-"):
+        i += 1
+    if i >= len(stage):
+        return "", []
+    name = stage[i].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name, stage[i + 1:]
+
+
+def _launches_pytest(stage) -> bool:
+    name, args = _program(stage)
+    if name in ("pytest", "py.test"):
+        return True
+    if name in _PYTHONS or name.startswith("python3."):
+        return any(a == "-m" and b in ("pytest", "py.test") for a, b in zip(args, args[1:]))
+    if name in _RUNNER_WRAPPERS:
+        return "pytest" in args or "py.test" in args
+    return False
+
+
+def _could_print(stage, tally) -> bool:
+    """Whether this command could have printed `tally` itself.
+
+    Replaying real sessions showed the first version of this refusing runs
+    for commands that print nothing a tally could come from: `cat >> notes`
+    and `sed -i` write to files, `grep -c` prints a count, and an echo that
+    merely mentions "2 passed" cannot produce "2 passed in 0.10s".
+    """
+    name, args = _program(stage)
+    if any(_STDOUT_TO_FILE.match(a) for a in stage):
+        return False
+    if name == "sed" and any(a == "--in-place" or (a.startswith("-i")) for a in args):
+        return False
+    if name in _FILE_PRINTERS:
+        return True
+    if name in _ECHOERS:
+        return " ".join(tally.split()) in " ".join(" ".join(args).split())
+    if name == "git" and args[:1] in (["log"], ["show"]):
+        return not any(a.startswith(("--oneline", "--format", "--pretty", "--stat", "--name-")) for a in args)
+    if name in _SEARCHERS:
+        return _search_could_match(name, args, tally)
+    return False
+
+
+def _search_could_match(name, args, tally) -> bool:
+    """Whether a grep-like search could print the tally line.
+
+    Only answers "no" when its pattern provably cannot match: an inverted
+    search, a pattern read from a file, or an unreadable pattern all count as
+    "could", the cautious direction.
+    """
+    flags = [a for a in args if a.startswith("-") and len(a) > 1]
+    short = "".join(f[1:] for f in flags if not f.startswith("--"))
+    # Counting, listing file names or staying quiet prints no matched lines.
+    if set(short) & set("clLq") or any(f in _SEARCH_PRINTS_NO_LINES for f in flags):
+        return False
+    if any(f in ("-v", "--invert-match", "-f", "--file") for f in flags) or "v" in short:
+        return True
+    pattern = None
+    for a, b in zip(args, args[1:]):
+        if a in ("-e", "--regexp"):
+            pattern = b
+            break
+    if pattern is None:
+        rest = [a for a in args if not a.startswith("-")]
+        if not rest:
+            return True
+        pattern = rest[0]
+    ignore_case = name in ("findstr", "select-string", "sls") or any(
+        f in ("--ignore-case",) or (not f.startswith("--") and "i" in f) for f in flags)
+    fixed = name == "fgrep" or any(f in ("-F", "--fixed-strings") for f in flags)
+    try:
+        regex = re.compile(re.escape(pattern) if fixed else pattern, re.IGNORECASE if ignore_case else 0)
+    except re.error:
+        regex = re.compile(re.escape(pattern), re.IGNORECASE if ignore_case else 0)
+    return regex.search(tally) is not None
 
 
 def record_run(
