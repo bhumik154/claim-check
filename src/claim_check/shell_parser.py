@@ -7,6 +7,7 @@ failure here is not evidence a claim is wrong, it's just evidence we
 couldn't check.
 """
 
+import bisect
 import re
 import shlex
 from typing import Optional
@@ -57,21 +58,72 @@ def _stash_heredocs(command: str):
     placeholders = {}
     state = {"unresolved": False, "counter": 0}
 
-    def _replace(m: re.Match) -> str:
-        body = m.group("body")
-        if not m.group("quote") and _UNRESOLVED_EXPANSION_RE.search(body):
+    def _stash(quote: str, body: str, rest: str) -> str:
+        if not quote and _UNRESOLVED_EXPANSION_RE.search(body):
             state["unresolved"] = True
         state["counter"] += 1
         key = f"\x00HEREDOC{state['counter']}\x00"
         placeholders[key] = body
-        return key + (m.groupdict().get("rest") or "")
+        return key + rest
 
     # Wrapped form first: a bare heredoc pattern is a strict substring of
     # the wrapped one, so matching wrapped first prevents it from also
     # matching (incorrectly) as a bare heredoc missing its substitution.
-    rewritten = _HEREDOC_WRAPPED_RE.sub(_replace, command)
-    rewritten = _HEREDOC_BARE_RE.sub(_replace, rewritten)
+    rewritten = _HEREDOC_WRAPPED_RE.sub(lambda m: _stash(m.group("quote"), m.group("body"), ""), command)
+    rewritten = _sub_bare_heredocs(rewritten, _stash)
     return rewritten, placeholders, state["unresolved"]
+
+
+_HEREDOC_OPENER_RE = re.compile(r"<<-?\s*(?P<quote>['\"]?)(?P<delim>\w+)(?P=quote)")
+_LINE_START_WORD_RE = re.compile(r"\n(\w+)")
+
+
+def _sub_bare_heredocs(text: str, stash) -> str:
+    """The same rewrite as `_HEREDOC_BARE_RE.sub`, in linear time.
+
+    The regex searched forward through the rest of the command for a
+    terminator line once per `<<`, so a command with thousands of them and no
+    terminator took seconds (5.5 s measured, against 41 ms in 0.6.0), on a
+    path that runs for every Bash command. Here every line's first word is
+    indexed once, and each opener looks its terminator up directly.
+
+    The regex's backtracking is reproduced, since commit-message extraction
+    depends on the exact result: an unquoted delimiter is shortened, longest
+    first, until a terminator exists (`<<EOFX` with a line `EOF` closes at
+    `EOF`, keeping `X` as the rest of the opening line). A quoted one is
+    taken whole. tests/test_heredoc_stash.py checks this against the regex.
+    """
+    terminators = {}
+    for found in _LINE_START_WORD_RE.finditer(text):
+        terminators.setdefault(found.group(1), []).append(found.start())
+
+    pieces, kept_from, search_from = [], 0, 0
+    while True:
+        opener = _HEREDOC_OPENER_RE.search(text, search_from)
+        if opener is None:
+            break
+        newline = text.find("\n", opener.end())
+        match = None
+        if newline != -1:
+            quote, word = opener.group("quote"), opener.group("delim")
+            lengths = [len(word)] if quote else range(len(word), 0, -1)
+            for length in lengths:
+                delim = word[:length]
+                positions = terminators.get(delim, [])
+                i = bisect.bisect_right(positions, newline)
+                if i < len(positions):
+                    rest_start = opener.end() - (len(word) - length)
+                    match = (quote, delim, positions[i], rest_start)
+                    break
+        if match is None:
+            search_from = opener.start() + 1
+            continue
+        quote, delim, terminator, rest_start = match
+        pieces.append(text[kept_from:opener.start()])
+        pieces.append(stash(quote, text[newline + 1:terminator], text[rest_start:newline]))
+        kept_from = search_from = terminator + 1 + len(delim)
+    pieces.append(text[kept_from:])
+    return "".join(pieces)
 
 
 def _split_into_segments(tokens: list) -> list:
