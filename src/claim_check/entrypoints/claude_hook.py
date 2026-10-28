@@ -21,7 +21,7 @@ from typing import Optional, Sequence
 
 from .._args import positive_timeout
 from .._debug import dump_payload
-from .._payload import bash_command, resolve_cwd
+from .._payload import bash_command, effective_dir
 from ..claims import extract_claims
 from ..compare import compare_claims
 from ..evidence import scope_of_run
@@ -98,7 +98,12 @@ def _run(stdin_text: Optional[str], args) -> int:
     if not claims:
         return 0
 
-    run_result = run_pytest(resolve_cwd(payload), timeout_s=args.timeout, command=args.command)
+    # The suite runs where the commit happens. From a parent folder,
+    # `cd /repo && git commit` otherwise ran pytest across every project
+    # in that folder, hit collection errors, and denied a true claim.
+    run_result = run_pytest(
+        effective_dir(payload, command), timeout_s=args.timeout, command=args.command
+    )
     verdict = compare_claims(claims, run_result.counts, scope=scope_of_run(run_result))
 
     if verdict.status == "mismatch":

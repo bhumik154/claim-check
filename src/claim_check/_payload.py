@@ -8,8 +8,12 @@ tool call because of an internal defect.
 Shared by all three hook entry points so the guards cannot drift apart.
 """
 
+import os
+import re
 from pathlib import Path
 from typing import Optional
+
+from .shell_parser import leading_cd_target
 
 
 def resolve_cwd(payload: dict) -> str:
@@ -29,6 +33,45 @@ def resolve_cwd(payload: dict) -> str:
             # is_dir() probe raise; treat it as unusable.
             return "."
     return "."
+
+
+# Git Bash writes Windows drives as "/c/Users/...". Windows Python reads that
+# as a path on the CURRENT drive, "C:\c\Users\...", which does not exist, so a
+# hook resolving it naively falls back and files evidence in the wrong place.
+_GIT_BASH_DRIVE_RE = re.compile(r"^/([A-Za-z])(?=/|$)")
+
+
+def _native_path(path: str) -> str:
+    if os.name == "nt":
+        path = _GIT_BASH_DRIVE_RE.sub(lambda m: m.group(1).upper() + ":", path)
+    return os.path.expanduser(path)
+
+
+def effective_dir(payload: dict, command) -> str:
+    """The directory a Bash command actually ran in.
+
+    The payload's cwd is where the Bash tool was, but `cd /repo && pytest`
+    runs the suite in /repo. Measured across real sessions, 12 of the 13
+    claims that looked for evidence in the wrong place came from commands of
+    that shape, and the commit hook ran the suite across every project in the
+    parent folder, hit collection errors, and denied a true claim.
+
+    Falls back to the payload directory whenever the cd target cannot be
+    resolved to a directory that exists.
+    """
+    base = resolve_cwd(payload)
+    target = leading_cd_target(command)
+    if target is None:
+        return base
+    path = Path(_native_path(target))
+    if not path.is_absolute():
+        path = Path(base) / path
+    try:
+        if path.is_dir():
+            return str(path.resolve())
+    except OSError:
+        pass
+    return base
 
 
 def bash_command(payload: dict) -> Optional[str]:

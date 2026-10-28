@@ -160,6 +160,37 @@ def _iter_message_values(tokens: list):
         i += 1
 
 
+def leading_cd_target(command: str) -> Optional[str]:
+    """The directory a command moves into before doing anything else.
+
+    The Bash tool reports the directory it was in, but `cd /repo && python
+    -m pytest` runs the suite somewhere else. Filing that run under the
+    reported directory put evidence where nothing later looked for it, and
+    made the commit hook run the suite in the parent folder.
+
+    Only a plain `cd <dir>` as the very first command counts. A cd later in
+    the line ran after other commands, a bare `cd` goes to the home
+    directory, and anything unparseable returns None.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return None
+    stashed_command, _heredocs, _unresolved = _stash_heredocs(command)
+    try:
+        lexer = shlex.shlex(stashed_command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+
+    segments = _split_into_segments(tokens)
+    if not segments:
+        return None
+    first = segments[0]
+    if len(first) == 2 and first[0] == "cd" and not first[1].startswith("-"):
+        return first[1]
+    return None
+
+
 def extract_commit_message(command: str) -> Optional[str]:
     stashed_command, heredocs, unresolved = _stash_heredocs(command)
 

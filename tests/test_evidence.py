@@ -405,3 +405,64 @@ def test_record_run_stores_the_run_that_went_unrecorded(project):
     record = evidence.record_run(project, "s1", _OBSERVED_COMMAND, _OBSERVED_2026_10_28)
     assert record is not None
     assert record["counts"]["passed"] == 443
+
+
+# --- load_fresh_nearby: finding a run filed under a nested directory -------
+#
+# Measured across real sessions: 13 of 57 claims looked for evidence under a
+# different directory from the one the run was filed under, and in every
+# case one directory was inside the other.
+
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    root = tmp_path / "workspace"
+    for name in ("p1", "p2"):
+        (root / name / "sub").mkdir(parents=True)
+        (root / name / "test_a.py").write_text("def test_a(): pass\n", encoding="utf-8")
+    return root
+
+
+def test_a_run_in_the_project_is_found_from_the_parent_folder(workspace):
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    record = evidence.load_fresh_nearby(workspace, "s1")
+    assert record is not None
+    assert evidence.counts_from_record(record).passed == 22
+
+
+def test_a_run_in_the_project_is_found_from_a_subfolder(workspace):
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace / "p1" / "sub", "s1") is not None
+
+
+def test_runs_in_two_nested_projects_are_ambiguous(workspace):
+    # Picking one could check a claim about p1 against the suite of p2.
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    evidence.record_run(workspace / "p2", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_a_run_in_an_unrelated_directory_is_never_used(workspace, tmp_path):
+    elsewhere = tmp_path / "scratch"
+    elsewhere.mkdir()
+    evidence.record_run(elsewhere, "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_a_nearby_run_still_has_to_be_fresh(workspace):
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    (workspace / "p1" / "test_new.py").write_text("def test_b(): pass\n", encoding="utf-8")
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_another_sessions_nearby_run_is_never_used(workspace):
+    evidence.record_run(workspace / "p1", "other-session", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_a_run_in_the_same_directory_still_wins_directly(workspace):
+    evidence.record_run(workspace, "s1", "python -m pytest", PASSING_OUTPUT)
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1")["cwd"] == str(workspace)

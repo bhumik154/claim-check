@@ -134,3 +134,14 @@ def test_an_unexpected_internal_error_still_exits_zero(project, monkeypatch):
     code, out = _run(_payload(project))
     assert code == 0
     assert out == ""
+
+
+def test_a_run_after_cd_is_filed_under_the_directory_it_ran_in(project):
+    # Issued from the parent folder, which is how the Bash tool really runs
+    # it. Filing it under the parent fingerprinted every project in there.
+    parent = project.parent
+    payload = _payload(project, command=f'cd "{project}" && python -m pytest -q')
+    payload["cwd"] = str(parent)
+    _run(payload)
+    assert evidence.load_fresh(project, "s1") is not None
+    assert evidence.load_fresh(parent, "s1") is None

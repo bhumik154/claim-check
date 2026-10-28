@@ -1,3 +1,4 @@
+import os
 import json
 
 from claim_check.entrypoints import claude_hook as claude_hook_module
@@ -400,3 +401,20 @@ def test_abstention_warning_survives_ratio_suffix_raising(tmp_path, capsys, monk
     captured = capsys.readouterr()
     assert captured.out.strip() == "", "no deny JSON may be emitted"
     assert "could not verify" in captured.err.lower()
+
+
+def test_a_commit_after_cd_runs_the_suite_in_that_directory(monkeypatch, tmp_path):
+    # Reproduced live: from the parent folder, `cd project && git commit -m
+    # "450 passed"` ran pytest across every project there, hit 17 collection
+    # errors, and DENIED a true claim.
+    project = tmp_path / "proj"
+    project.mkdir()
+    seen = {}
+
+    def fake_run_pytest(cwd, **kwargs):
+        seen["cwd"] = cwd
+        return result_from_captured_output(0, "============ 22 passed in 0.15s ============")
+
+    monkeypatch.setattr(claude_hook_module, "run_pytest", fake_run_pytest)
+    main(_payload(f'cd "{project}" && git commit -m "22 passed"', cwd=str(tmp_path)), argv=[])
+    assert os.path.samefile(seen["cwd"], project)

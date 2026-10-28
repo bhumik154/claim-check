@@ -357,3 +357,30 @@ def test_claim_check_verbose_is_gone(tmp_path):
     import inspect
     from claim_check.entrypoints import claude_stop_hook
     assert "CLAIM_CHECK_VERBOSE" not in inspect.getsource(claude_stop_hook)
+
+
+def test_a_claim_made_from_the_parent_folder_finds_the_projects_run(project, tmp_path):
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False, cwd=str(project.parent))
+    message = _message_of(out)
+    assert message is not None and "21" in message, "the false claim must be checked, not abstained on"
+
+
+def test_a_true_claim_made_from_the_parent_folder_is_silent(project, tmp_path):
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(project, tmp_path, "All done. 21 passed.", record=False, cwd=str(project.parent))
+    assert out == ""
+
+
+def test_runs_in_two_projects_are_reported_as_ambiguous_not_as_missing(project, tmp_path):
+    # Both runs are fresh and readable. A sentence saying none was recorded,
+    # or that it was stale, would be false, so the cause has to cover this.
+    other = project.parent / "other"
+    other.mkdir()
+    (other / "test_b.py").write_text("def test_b(): pass\n", encoding="utf-8")
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    evidence.record_run(other, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False, cwd=str(project.parent))
+    message = _message_of(out)
+    assert message is not None and "could not verify" in message
+    assert "more than one project" in message

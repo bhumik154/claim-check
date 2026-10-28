@@ -208,8 +208,11 @@ def evidence_path(project_dir, session_id: str) -> Path:
     otherwise silently judge each other's work.
     """
     digest = hashlib.sha256(str(Path(project_dir).resolve()).encode("utf-8", "replace")).hexdigest()[:16]
-    safe_session = "".join(c for c in str(session_id) if c.isalnum() or c in "-_")[:64] or "unknown"
-    return cache_root() / digest / f"{safe_session}.json"
+    return cache_root() / digest / f"{_safe_session(session_id)}.json"
+
+
+def _safe_session(session_id) -> str:
+    return "".join(c for c in str(session_id) if c.isalnum() or c in "-_")[:64] or "unknown"
 
 
 def fingerprint(project_dir) -> str:
@@ -536,6 +539,56 @@ def load_fresh(
         return None
 
     return record
+
+
+def load_fresh_nearby(cwd, session_id: str, now: Optional[float] = None) -> Optional[dict]:
+    """Fresh evidence for `cwd`, or for one project nested with it.
+
+    Evidence is filed under the directory a run happened in, but the end of
+    a turn is checked from wherever the Bash tool happens to be, and that
+    moves. Measured across real sessions, 13 of 57 claims looked in the wrong
+    directory, and in every one of them one directory was inside the other:
+    usually the run inside a project, the claim from its parent folder.
+
+    So when nothing is filed under `cwd` itself, this session's runs in an
+    ancestor or descendant directory are considered, each judged fresh for
+    its OWN directory. Exactly one such directory is used. Several means the
+    session worked in more than one nested project, and picking one could
+    check a claim about one project against another's suite; that resolves
+    to None, as does anything in an unrelated directory. Unknown, never wrong.
+    """
+    direct = load_fresh(cwd, session_id, now=now)
+    if direct is not None:
+        return direct
+
+    try:
+        here = Path(cwd).resolve()
+        candidates = list(cache_root().glob(f"*/{_safe_session(session_id)}.json"))
+    except (OSError, ValueError):
+        return None
+
+    found = {}
+    for path in candidates:
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            there = Path(stored["cwd"]).resolve()
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not (_contains(here, there) or _contains(there, here)):
+            continue
+        record = load_fresh(there, session_id, now=now)
+        if record is not None:
+            found[os.path.normcase(str(there))] = record
+
+    if len(found) == 1:
+        return next(iter(found.values()))
+    return None
+
+
+def _contains(outer: Path, inner: Path) -> bool:
+    """True when `inner` is `outer` or lies inside it, ignoring case on Windows."""
+    outer_s, inner_s = os.path.normcase(str(outer)), os.path.normcase(str(inner))
+    return inner_s == outer_s or inner_s.startswith(outer_s.rstrip(os.sep) + os.sep)
 
 
 def counts_from_record(record: dict) -> Optional[PytestCounts]:
