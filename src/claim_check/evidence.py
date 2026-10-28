@@ -29,6 +29,7 @@ telling the truth.
 
 import hashlib
 import json
+import re
 import os
 import shlex
 import tempfile
@@ -37,7 +38,9 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .models import PytestCounts, RunScope
+from .pytest_parser import bare_summary_lines, parse_summary_line
 from .runners import parse_test_output
+from .shell_parser import shell_tokens  # noqa: F401  re-exported
 
 # Test results depend on state that mtimes cannot observe: environment
 # variables, database contents, installed package versions, the clock. Even
@@ -111,6 +114,10 @@ _VALUE_TAKING_FLAGS = frozenset(
 )
 
 _SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", "|&"})
+
+# Any redirection, with or without its target attached: ">", ">>f", "2>&1",
+# "&>log", ">|f", "<in", "<<<word", "<(" (process substitution).
+_REDIRECT = re.compile(r"^(?:\d*|&)(?:>>|>&|>\||>|<<<|<<|<&|<>|<)")
 
 _RUNNER_TOKENS = frozenset({"python", "python3", "py", "-m", "pytest", "py.test", "poetry", "hatch", "run", "uv", "pipenv", "exec"})
 
@@ -207,8 +214,11 @@ def evidence_path(project_dir, session_id: str) -> Path:
     otherwise silently judge each other's work.
     """
     digest = hashlib.sha256(str(Path(project_dir).resolve()).encode("utf-8", "replace")).hexdigest()[:16]
-    safe_session = "".join(c for c in str(session_id) if c.isalnum() or c in "-_")[:64] or "unknown"
-    return cache_root() / digest / f"{safe_session}.json"
+    return cache_root() / digest / f"{_safe_session(session_id)}.json"
+
+
+def _safe_session(session_id) -> str:
+    return "".join(c for c in str(session_id) if c.isalnum() or c in "-_")[:64] or "unknown"
 
 
 def fingerprint(project_dir) -> str:
@@ -266,18 +276,24 @@ def _pytest_segments(tokens: Sequence[str]) -> list:
     which silently makes the entire evidence store unusable.
     """
     segments = [[]]
+    # A redirect is dropped, not treated as the end of the command: bash
+    # allows arguments after one, and `pytest -q > out.txt tests/unit` is a
+    # narrowed run. Ending the segment at ">" hid "tests/unit" and made it
+    # look like the whole suite. A bare operator from shlex.split (">" then
+    # "out.txt") drops its target too, so the file name is not a test path.
+    skip_target = False
     for token in tokens:
-        if (
-            token in _SHELL_OPERATORS
-            or token.startswith(">")
-            or token.startswith("<")
-            or token.startswith("2>")
-            or token.startswith("1>")
-            or token.startswith("&>")
-        ):
+        if skip_target:
+            skip_target = False
+            continue
+        if token in _SHELL_OPERATORS:
             segments.append([])
-        else:
-            segments[-1].append(token)
+            continue
+        redirect = _REDIRECT.match(token)
+        if redirect:
+            skip_target = redirect.end() == len(token)
+            continue
+        segments[-1].append(token)
 
     found = []
     for segment in segments:
@@ -419,6 +435,187 @@ def _segment_narrowing_cause(runner: str, tokens: list):
     return None
 
 
+def parse_run_output(stdout, command) -> Optional[PytestCounts]:
+    """Counts from a shell command's output, or None if it was not a run.
+
+    The Bash tool hands over everything the command printed, not just
+    pytest's part. `pytest -q` prints its tally undecorated, and the strict
+    parser only trusts that form on the final line, so `pytest -q; echo
+    exit=$?` or `... && ls` lost the run entirely. Measured across real
+    sessions, 62 of 232 runs went unrecorded that way, silently.
+
+    A quiet summary that is not last is accepted only when pytest was
+    genuinely launched, as a real test run, and the output holds exactly one
+    tally-shaped line: with several, there is no telling which belongs to this
+    project, and wrong evidence is worse than none because it can confirm a
+    false claim or contradict a true one.
+
+    Whichever way a tally is found, when the line launches pytest nothing
+    else in it may be able to have printed that tally. Smoke testing found
+    `python -m pytest -q; cat last_run.log`, with pytest crashing before its
+    summary, recording the old log's count as this run, and the same held in
+    0.6.0 whenever the log's tally happened to be its last line. A line that
+    launches no pytest is still read on its merits, so `make test` works; its
+    record is marked scoped and never used for a verdict.
+    """
+    pipelines = _pipelines(shell_tokens(command))
+    launch = [p for p in pipelines if any(_launches_pytest(stage) for stage in p)]
+
+    counts = parse_test_output(stdout)
+    if counts is not None:
+        if launch and _another_command_could_print(pipelines, launch, counts.raw_summary_line):
+            return None
+        return counts
+
+    tallies = bare_summary_lines(stdout)
+    if len(tallies) != 1 or not launch:
+        return None
+    if any(flag in stage for p in launch for stage in p for flag in _NOT_A_TEST_RUN):
+        return None
+    if _another_command_could_print(pipelines, launch, tallies[0]):
+        return None
+    return parse_summary_line(tallies[0] + "\n")
+
+
+def _another_command_could_print(pipelines, launch, line) -> bool:
+    """Whether something other than the pytest launch could have printed `line`.
+
+    Only the first command of a pipeline introduces text; those after a `|`
+    filter what it printed, so `git status | head -1` cannot produce a tally.
+    `echo` and friends are the exception, since they ignore their input.
+    """
+    for pipeline in pipelines:
+        if pipeline in launch:
+            continue
+        if _could_print(pipeline[0], line):
+            return True
+        for stage in pipeline[1:]:
+            if _program(stage)[0] in _ECHOERS and _could_print(stage, line):
+                return True
+    return False
+
+
+# Printing a file or a commit can reproduce an old tally verbatim.
+_FILE_PRINTERS = frozenset({
+    "cat", "tac", "type", "head", "tail", "less", "more", "bat", "sed", "awk", "gawk",
+    "get-content", "gc", "jq", "strings",
+})
+_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "findstr", "select-string", "sls"})
+_ECHOERS = frozenset({"echo", "printf", "write-output", "write-host"})
+_SEARCH_PRINTS_NO_LINES = frozenset({
+    "--count", "--files-with-matches", "--files-without-match", "--quiet", "--silent",
+})
+# Sends standard output into a file: `>f`, `>>f`, `1>f`, `&>f`. Not `>&2`,
+# which only moves it to standard error.
+_STDOUT_TO_FILE = re.compile(r"^(?:1?>>?|&>>?)(?!&)\S")
+_PYTHONS = frozenset({"python", "python3", "py"})
+_RUNNER_WRAPPERS = frozenset({"poetry", "hatch", "uv", "pipenv", "pdm", "rye"})
+_NOT_A_TEST_RUN = frozenset({
+    "--co", "--collect-only", "--version", "-V", "-h", "--help", "--fixtures", "--markers",
+})
+_PIPELINE_SEPARATORS = frozenset({";", "&&", "||", "&", "(", ")"})
+
+
+def _pipelines(tokens) -> list:
+    """Splits tokens into pipelines, each a list of stages (lists of tokens)."""
+    pipelines, stages, stage = [], [], []
+    for token in tokens:
+        if token in _PIPELINE_SEPARATORS:
+            stages.append(stage)
+            pipelines.append([s for s in stages if s])
+            stages, stage = [], []
+        elif token in ("|", "|&"):
+            stages.append(stage)
+            stage = []
+        else:
+            stage.append(token)
+    stages.append(stage)
+    pipelines.append([s for s in stages if s])
+    return [p for p in pipelines if p]
+
+
+def _program(stage) -> tuple:
+    """(program name, its arguments), skipping leading VAR=value assignments."""
+    i = 0
+    while i < len(stage) and "=" in stage[i] and not stage[i].startswith("-"):
+        i += 1
+    if i >= len(stage):
+        return "", []
+    name = stage[i].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name, stage[i + 1:]
+
+
+def _launches_pytest(stage) -> bool:
+    name, args = _program(stage)
+    if name in ("pytest", "py.test"):
+        return True
+    if name in _PYTHONS or name.startswith("python3."):
+        return any(a == "-m" and b in ("pytest", "py.test") for a, b in zip(args, args[1:]))
+    if name in _RUNNER_WRAPPERS:
+        return "pytest" in args or "py.test" in args
+    return False
+
+
+def _could_print(stage, tally) -> bool:
+    """Whether this command could have printed `tally` itself.
+
+    Replaying real sessions showed the first version of this refusing runs
+    for commands that print nothing a tally could come from: `cat >> notes`
+    and `sed -i` write to files, `grep -c` prints a count, and an echo that
+    merely mentions "2 passed" cannot produce "2 passed in 0.10s".
+    """
+    name, args = _program(stage)
+    if any(_STDOUT_TO_FILE.match(a) for a in stage):
+        return False
+    if name == "sed" and any(a == "--in-place" or (a.startswith("-i")) for a in args):
+        return False
+    if name in _FILE_PRINTERS:
+        return True
+    if name in _ECHOERS:
+        return " ".join(tally.split()) in " ".join(" ".join(args).split())
+    if name == "git" and args[:1] in (["log"], ["show"]):
+        return not any(a.startswith(("--oneline", "--format", "--pretty", "--stat", "--name-")) for a in args)
+    if name in _SEARCHERS:
+        return _search_could_match(name, args, tally)
+    return False
+
+
+def _search_could_match(name, args, tally) -> bool:
+    """Whether a grep-like search could print the tally line.
+
+    Only answers "no" when its pattern provably cannot match: an inverted
+    search, a pattern read from a file, or an unreadable pattern all count as
+    "could", the cautious direction.
+    """
+    flags = [a for a in args if a.startswith("-") and len(a) > 1]
+    short = "".join(f[1:] for f in flags if not f.startswith("--"))
+    # Counting, listing file names or staying quiet prints no matched lines.
+    if set(short) & set("clLq") or any(f in _SEARCH_PRINTS_NO_LINES for f in flags):
+        return False
+    if any(f in ("-v", "--invert-match", "-f", "--file") for f in flags) or "v" in short:
+        return True
+    pattern = None
+    for a, b in zip(args, args[1:]):
+        if a in ("-e", "--regexp"):
+            pattern = b
+            break
+    if pattern is None:
+        rest = [a for a in args if not a.startswith("-")]
+        if not rest:
+            return True
+        pattern = rest[0]
+    ignore_case = name in ("findstr", "select-string", "sls") or any(
+        f in ("--ignore-case",) or (not f.startswith("--") and "i" in f) for f in flags)
+    fixed = name == "fgrep" or any(f in ("-F", "--fixed-strings") for f in flags)
+    try:
+        regex = re.compile(re.escape(pattern) if fixed else pattern, re.IGNORECASE if ignore_case else 0)
+    except re.error:
+        regex = re.compile(re.escape(pattern), re.IGNORECASE if ignore_case else 0)
+    return regex.search(tally) is not None
+
+
 def record_run(
     project_dir,
     session_id: str,
@@ -434,14 +631,11 @@ def record_run(
     Never raises. A failure to write evidence must not disturb the tool call
     being observed.
     """
-    counts = parse_test_output(stdout)
+    counts = parse_run_output(stdout, command)
     if counts is None:
         return None
 
-    try:
-        argv = shlex.split(command, posix=True)
-    except ValueError:
-        argv = []
+    argv = shell_tokens(command)
 
     record = {
         "recorded_at": time.time(),
@@ -502,6 +696,93 @@ def load_fresh(
         return None
 
     return record
+
+
+# A folder holding any of these is a project of its own. Deliberately broad:
+# misreading a plain folder as a project only makes a lookup more cautious.
+_PROJECT_MARKERS = ("pyproject.toml", "pytest.ini", "setup.cfg", "setup.py", "tox.ini", "package.json")
+
+
+def project_root(path) -> Optional[Path]:
+    """The project `path` belongs to, or None when it is in no project.
+
+    The nearest folder at or above `path` that holds a test or package config
+    file, or is the top of a git repository. Smoke-testing this release before it shipped showed why
+    "the folder a command cd'd into" is not good enough on its own: the
+    commit hook ran pytest in `docs/`, found no tests and denied a true
+    claim, and a nested demo project's run was held against a claim about
+    the project around it.
+    """
+    try:
+        here = Path(path).resolve()
+    except (OSError, ValueError, TypeError):
+        return None
+    for folder in (here, *here.parents):
+        try:
+            if (folder / ".git").exists() or any((folder / m).is_file() for m in _PROJECT_MARKERS):
+                return folder
+        except OSError:
+            return None
+    return None
+
+
+def load_fresh_nearby(cwd, session_id: str, now: Optional[float] = None) -> Optional[dict]:
+    """Fresh evidence for `cwd`, or for one project nested with it.
+
+    Evidence is filed under the directory a run happened in, but the end of
+    a turn is checked from wherever the Bash tool happens to be, and that
+    moves. Measured across real sessions, 13 of 57 claims looked in the wrong
+    directory, and in every one of them one directory was inside the other:
+    usually the run inside a project, the claim from its parent folder.
+
+    So when nothing is filed under `cwd` itself, this session's runs in an
+    ancestor or descendant directory are considered, each judged fresh for
+    its OWN directory. Exactly one such directory is used. Several means the
+    session worked in more than one nested project, and picking one could
+    check a claim about one project against another's suite; that resolves
+    to None, as does anything in an unrelated directory. Unknown, never wrong.
+    """
+    direct = load_fresh(cwd, session_id, now=now)
+    if direct is not None:
+        return direct
+
+    try:
+        here = Path(cwd).resolve()
+        candidates = list(cache_root().glob(f"*/{_safe_session(session_id)}.json"))
+    except (OSError, ValueError):
+        return None
+
+    # Inside a project, only that project's own runs count. A nested project
+    # (a demo or fixture with its own config) is a different suite, and its
+    # result held against a claim about this one is a false accusation.
+    # Outside any project, as in a folder that merely holds several, a run in
+    # one project below is still allowed, subject to the exactly-one rule.
+    home = project_root(here)
+
+    found = {}
+    for path in candidates:
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            there = Path(stored["cwd"]).resolve()
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not (_contains(here, there) or _contains(there, here)):
+            continue
+        if home is not None and project_root(there) != home:
+            continue
+        record = load_fresh(there, session_id, now=now)
+        if record is not None:
+            found[os.path.normcase(str(there))] = record
+
+    if len(found) == 1:
+        return next(iter(found.values()))
+    return None
+
+
+def _contains(outer: Path, inner: Path) -> bool:
+    """True when `inner` is `outer` or lies inside it, ignoring case on Windows."""
+    outer_s, inner_s = os.path.normcase(str(outer)), os.path.normcase(str(inner))
+    return inner_s == outer_s or inner_s.startswith(outer_s.rstrip(os.sep) + os.sep)
 
 
 def counts_from_record(record: dict) -> Optional[PytestCounts]:

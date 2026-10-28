@@ -134,6 +134,18 @@ Recorded per run: the counts from the summary line, the exact command, the
 working directory, the session id, and a cheap fingerprint of the source tree
 (file paths, sizes and mtimes, never contents).
 
+A quiet `pytest -q` run counts even when other output follows it, as in
+`pytest -q; echo exit=$?`, provided the command really ran pytest and the
+output holds exactly one tally. Several tallies mean several suites ran, and
+there is no telling which one is this project's, so that is not recorded.
+
+Whenever a command launches pytest, nothing else in it may be able to have
+printed the tally: a `cat` or `head` of a file, `git show`, an `echo` of
+that exact line, or a `grep` whose pattern could match it. Otherwise a crash
+followed by `cat last_run.log` would record an old run as a new one. A
+command that cannot be told apart this way is not recorded, which costs a
+check but never produces a wrong one.
+
 Two things about how that evidence is treated:
 
 - **Staleness only ever downgrades evidence to "unknown".** If the tree
@@ -150,6 +162,20 @@ Evidence lives outside your repository, under `%LOCALAPPDATA%\claim-check\`
 (Windows) or `~/.cache/claim-check/` (Unix), keyed by project path and session.
 Keeping it out of the working tree is deliberate: inside the repo it would be a
 file the agent under verification could simply edit.
+
+The project path is where the tests actually ran, so `cd project && pytest`
+issued from a parent folder is filed under `project`. At the end of a turn,
+if nothing is filed under the current folder, a run in a folder above or
+below it is used instead, but only when exactly one such folder has one. Runs
+in two projects under the same folder leave the claim unverified rather than
+checked against the wrong project's suite.
+
+A project is the nearest folder holding a test or package config file
+(`pyproject.toml`, `package.json`, `pytest.ini` and similar), or the top of a
+git repository. Inside a project only that project's own runs count, so a
+nested demo or fixture project's run is never held against a claim about
+the project around it. The commit hook runs its suite at the project root,
+so `cd docs && git commit` still tests the whole project.
 
 Delete that directory at any time; it is a cache, and losing it only means the
 next claim goes unverified rather than wrongly flagged.

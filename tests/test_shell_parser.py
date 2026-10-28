@@ -1,4 +1,6 @@
-from claim_check.shell_parser import extract_commit_message
+import pytest
+
+from claim_check.shell_parser import extract_commit_message, leading_cd_target
 
 
 def test_simple_double_quoted_message():
@@ -138,3 +140,42 @@ def test_heredoc_surrounded_by_text_resolves_instead_of_leaking_a_placeholder():
     assert "\x00" not in message
     assert "22 passed" in message
     assert "prefix" in message
+
+
+# --- leading_cd_target -----------------------------------------------------
+#
+# The Bash tool's directory and the directory the tests ran in can differ:
+# `cd "/c/Claude Code/projects/x" && python -m pytest -q` issued from the
+# parent folder. Measured across real sessions, 12 of the 13 claims that
+# looked for evidence in the wrong directory came from commands of this shape.
+
+
+@pytest.mark.parametrize("command, expected", [
+    ('cd "/c/Claude Code/projects/x" && python -m pytest -q', "/c/Claude Code/projects/x"),
+    ("cd proj && pytest", "proj"),
+    ("cd proj; pytest", "proj"),
+    ("cd proj && ls && pytest -q", "proj"),
+    ("cd 'with space' && pytest", "with space"),
+    # The shape of a real multi-line commit: an apostrophe in the heredoc
+    # body is not a quoting error and must not hide the cd.
+    ("cd proj && git commit -F- <<'MSG'\nit's done\nMSG", "proj"),
+])
+def test_a_leading_cd_names_the_directory_the_command_runs_in(command, expected):
+    assert leading_cd_target(command) == expected
+
+
+@pytest.mark.parametrize("command", [
+    "pytest -q",
+    "ls && cd proj && pytest",       # not leading: earlier commands ran elsewhere
+    "cd && pytest",                  # bare cd goes home, not into a project
+    'cd "unbalanced && pytest',      # unparseable
+    "cd a b && pytest",              # malformed
+    "",
+])
+def test_anything_but_a_plain_leading_cd_gives_no_target(command):
+    assert leading_cd_target(command) is None
+
+
+
+def test_a_cd_on_its_own_line_is_still_a_leading_cd():
+    assert leading_cd_target("cd proj\npython -m pytest -q") == "proj"

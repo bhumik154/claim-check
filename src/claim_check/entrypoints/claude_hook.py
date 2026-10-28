@@ -21,10 +21,10 @@ from typing import Optional, Sequence
 
 from .._args import positive_timeout
 from .._debug import dump_payload
-from .._payload import bash_command, resolve_cwd
+from .._payload import bash_command, effective_dir
 from ..claims import extract_claims
 from ..compare import compare_claims
-from ..evidence import scope_of_run
+from ..evidence import project_root, scope_of_run
 from ..runner import DEFAULT_TIMEOUT_S, run_pytest
 from ..session_stats import ratio_suffix
 from ..shell_parser import extract_commit_message
@@ -98,7 +98,15 @@ def _run(stdin_text: Optional[str], args) -> int:
     if not claims:
         return 0
 
-    run_result = run_pytest(resolve_cwd(payload), timeout_s=args.timeout, command=args.command)
+    # The suite runs at the root of the project being committed to. Not the
+    # Bash tool's folder: from a parent folder, `cd /repo && git commit` ran
+    # pytest across every project there and denied a true claim. Not the
+    # folder the command cd'd into either: `cd docs && git commit` ran it in
+    # docs/, found no tests, and denied a true claim the same way.
+    where = effective_dir(payload, command)
+    run_result = run_pytest(
+        str(project_root(where) or where), timeout_s=args.timeout, command=args.command
+    )
     verdict = compare_claims(claims, run_result.counts, scope=scope_of_run(run_result))
 
     if verdict.status == "mismatch":

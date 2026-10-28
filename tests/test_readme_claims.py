@@ -258,3 +258,26 @@ def test_fix_refuses_entirely_when_an_anchor_is_missing(sandbox, capsys):
     assert readme_facts.main(["--fix"]) == 2
     assert readme.read_text(encoding="utf-8") == before, "refusal must not modify the file"
     assert "readme_facts:" in capsys.readouterr().err
+
+
+
+def test_the_collected_count_is_read_from_the_summary_not_from_a_test_name(monkeypatch):
+    # Found smoke-testing 0.7.0 before release: a test named after the input
+    # "3 tests collected in 0.01s" made the first match in --collect-only
+    # output 3, and --fix wrote "has 3 cases" into the README. The check did
+    # not object, because the README and the check read the same wrong
+    # number. The real count is the summary line, which pytest prints last.
+    import subprocess
+
+    listing = (
+        "tests/test_evidence.py::test_x[python -m pytest -q --co-3 tests collected in 0.01s\nold]\n"
+        "tests/test_evidence.py::test_y\n"
+        "\n"
+        "553 tests collected in 0.16s\n"
+    )
+
+    class Done:
+        stdout = listing
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Done())
+    assert readme_facts.collected_test_count() == 553

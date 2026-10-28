@@ -278,3 +278,24 @@ def test_unreadable_existing_transcript_returns_none(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pathlib.Path, "open", _blocked_open)
     assert summarize_session(p) is None
+
+
+def test_a_quiet_run_followed_by_other_output_counts_as_a_run(tmp_path):
+    # The same runs the evidence store used to drop: the session ratio read
+    # them as "no test run at all" and reported the claim as unbacked.
+    p = _session(tmp_path, [
+        _bash("python -m pytest -q; echo exit=$?", "t1"),
+        _result("....\n12 passed in 0.31s\nexit=0", "t1"),
+        _assistant("All 12 tests pass."),
+    ])
+    stats = summarize_session(p)
+    assert stats.backed == 1 and stats.unbacked == 0
+
+
+def test_a_vitest_run_counts_as_a_run(tmp_path):
+    p = _session(tmp_path, [
+        _bash("npx vitest run", "t1"),
+        _result(" Test Files  2 passed (2)\n      Tests  18 passed (18)\n", "t1"),
+        _assistant("All 18 tests pass."),
+    ])
+    assert summarize_session(p).causes.get(NO_RUN, 0) == 0

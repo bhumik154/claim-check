@@ -1,3 +1,4 @@
+import os
 import json
 
 from claim_check.entrypoints import claude_hook as claude_hook_module
@@ -400,3 +401,38 @@ def test_abstention_warning_survives_ratio_suffix_raising(tmp_path, capsys, monk
     captured = capsys.readouterr()
     assert captured.out.strip() == "", "no deny JSON may be emitted"
     assert "could not verify" in captured.err.lower()
+
+
+def test_a_commit_after_cd_runs_the_suite_in_that_directory(monkeypatch, tmp_path):
+    # Reproduced live: from the parent folder, `cd project && git commit -m
+    # "450 passed"` ran pytest across every project there, hit 17 collection
+    # errors, and DENIED a true claim.
+    project = tmp_path / "proj"
+    project.mkdir()
+    seen = {}
+
+    def fake_run_pytest(cwd, **kwargs):
+        seen["cwd"] = cwd
+        return result_from_captured_output(0, "============ 22 passed in 0.15s ============")
+
+    monkeypatch.setattr(claude_hook_module, "run_pytest", fake_run_pytest)
+    main(_payload(f'cd "{project}" && git commit -m "22 passed"', cwd=str(tmp_path)), argv=[])
+    assert os.path.samefile(seen["cwd"], project)
+
+
+
+def test_a_commit_from_a_subfolder_runs_the_suite_at_the_project_root(monkeypatch, tmp_path):
+    # Found by smoke-testing 0.7.0 before release: `cd docs && git commit -m "6 passed"` ran
+    # pytest in docs/, found no tests, and denied a true claim.
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("", encoding="utf-8")
+    seen = {}
+
+    def fake_run_pytest(cwd, **kwargs):
+        seen["cwd"] = cwd
+        return result_from_captured_output(0, "============ 22 passed in 0.15s ============")
+
+    monkeypatch.setattr(claude_hook_module, "run_pytest", fake_run_pytest)
+    main(_payload('cd docs && git commit -m "22 passed"', cwd=str(repo)), argv=[])
+    assert os.path.samefile(seen["cwd"], repo)

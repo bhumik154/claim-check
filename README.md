@@ -15,10 +15,11 @@ the session is going so far:
 
 ```
 claim-check: could not verify "all tests pass". No usable whole-suite test run
-for this claim: either none was recorded in this session, or the most recent
-one is too old, unreadable, or recorded against a different state of the tree.
-(this session: 2 of 6 claims had a whole-suite run behind them; 3 had no test
-run at all)
+for this claim: either none was recorded for this project in this session, or
+the most recent one is too old, unreadable, or recorded against a different
+state of the tree, or runs in more than one project leave it unclear which one
+the claim is about. (this session: 2 of 6 claims had a whole-suite run behind
+them; 3 had no test run at all)
 ```
 
 It says "had a whole-suite run behind them" rather than "verified" on purpose.
@@ -49,7 +50,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.6.0
+    rev: v0.7.0
     hooks:
       - id: claim-check
 ```
@@ -65,7 +66,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.6.0
+pip install git+https://github.com/bhumik154/claim-check@v0.7.0
 ```
 
 ```bash
@@ -158,7 +159,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 443 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 555 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 This file is tested too. `scripts/readme_facts.py` pins the case count above, the version strings in the install instructions, and the supported-runner list, and it checks that the example messages below still regenerate from real code. Run `python scripts/readme_facts.py --fix` when a change makes one of them stale. It covers mechanical facts only: prose that quietly starts contradicting the code is still on a reviewer to catch.
 
@@ -210,6 +211,9 @@ The cases worth knowing about:
 | A runner whose own stated total disagrees with the parts | Rejected outright. Both JS runners state their total, so an unrecognised label makes the arithmetic disagree, and disagreement returns nothing rather than an undercount |
 | `npm test`, `yarn test`, `make test` | Marked scoped. They may run everything, but the runner and its arguments are hidden, and unknown scope is never usable as whole-suite evidence |
 | `npx jest -t login`, `npx vitest run --changed`, `npx jest --onlyChanged` | Marked scoped, per each runner's own narrowing flags |
+| `pytest -q; echo exit=$?`, `pytest -q && git status`, captured from real sessions | Recorded. A quiet summary followed by other output used to be dropped silently, about a quarter of real runs. It now counts when pytest itself was launched, the output holds exactly one tally, and nothing else in the command (a `cat` of a log, `git show`, a matching `grep`) could have printed it. Anything less certain is refused rather than guessed |
+| `cd project && pytest`, then a claim made from the parent folder | The run is filed under `project` and found from a folder above or below it. Inside a project only its own runs count, so a nested demo project's run is never held against the project around it, and runs in two projects under one folder leave the claim unverified. The commit hook runs its suite at the project root: from the parent folder it used to collect every project there and deny a true claim, and from `docs/` it found no tests and did the same |
+| `pytest -q;echo`, `pytest -q > out.txt tests/unit`, commands split across lines, a heredoc commit message containing an apostrophe | Scope still read correctly. Each of these used to make a whole-suite run look narrowed, a narrowed one look whole-suite, or the line unparseable |
 | A nonexistent `--cwd`, an unbalanced quote in `--command`, a malformed hook payload | All fail open with a specific reason. Every entry point also has a catch-all, so no internal error can block a commit |
 
 ## What this is not

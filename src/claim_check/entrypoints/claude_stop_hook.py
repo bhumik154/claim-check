@@ -38,7 +38,7 @@ from .._debug import dump_payload
 from .._payload import resolve_cwd, session_id
 from ..compare import compare_claims
 from ..conversation import extract_claims
-from ..evidence import counts_from_record, load_fresh
+from ..evidence import counts_from_record, load_fresh_nearby
 from ..session_stats import ratio_suffix
 from ..transcript import last_assistant_text
 
@@ -58,16 +58,20 @@ def _note(message: str) -> str:
 
 def _cause_sentence(record) -> str:
     if record is None:
-        # `load_fresh` collapses four distinct reasons into this one None:
-        # no record at all, a malformed record, a TTL expiry, or a
-        # fingerprint mismatch. In the TTL case a whole-suite run really was
-        # recorded this session, so the sentence must not deny that a run
-        # exists; it can only say the run on hand is not usable, without
-        # claiming to know which of the four reasons is why.
+        # `load_fresh_nearby` collapses six distinct reasons into this one
+        # None: no record for this project, a malformed record, a TTL expiry,
+        # a fingerprint mismatch, fresh runs in more than one project with no
+        # way to tell which one the claim is about, or a run that belongs to
+        # a nested project rather than this one. In several of those a
+        # whole-suite run really was recorded this session, so the sentence
+        # must not deny that a run exists; it can only say none is usable for
+        # this project, without claiming to know which reason is why.
         return (
             "No usable whole-suite test run for this claim: either none was "
-            "recorded in this session, or the most recent one is too old, unreadable, "
-            "or recorded against a different state of the tree."
+            "recorded for this project in this session, or the most recent one is "
+            "too old, unreadable, or recorded against a different state of the tree, "
+            "or runs in more than one project leave it unclear which one the claim "
+            "is about."
         )
     return "The most recent test run recorded in this session was narrowed, so it covered less than the whole suite."
 
@@ -110,7 +114,7 @@ def _run(stdin_text: Optional[str]) -> int:
         return 0
 
     claim = claims[0]
-    record = load_fresh(resolve_cwd(payload), session_id(payload))
+    record = load_fresh_nearby(resolve_cwd(payload), session_id(payload))
 
     if record is None or record.get("scoped") is True:
         # No usable evidence. Reported, never as a finding of falsehood: the

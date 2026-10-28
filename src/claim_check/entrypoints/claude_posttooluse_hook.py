@@ -18,7 +18,7 @@ import sys
 from typing import Optional, Sequence
 
 from .._debug import dump_payload
-from .._payload import bash_command, resolve_cwd, session_id, tool_stdout
+from .._payload import bash_command, effective_dir, session_id, tool_stdout
 from ..evidence import record_run
 
 import json
@@ -53,7 +53,10 @@ def _run(stdin_text: Optional[str]) -> int:
     # when the output holds no pytest summary line. Deciding from the output
     # rather than by pattern-matching the command string means a wrapper
     # ("make test", "poetry run pytest") is recognised on its merits.
-    record_run(resolve_cwd(payload), session_id(payload), command, stdout)
+    # Filed under where the suite ran, not where the Bash tool was: a run
+    # after `cd /repo &&` belongs to /repo, and fingerprinting the parent
+    # folder instead would go stale on edits to any other project in it.
+    record_run(effective_dir(payload, command), session_id(payload), command, stdout)
     return 0
 
 

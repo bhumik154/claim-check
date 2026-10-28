@@ -338,3 +338,340 @@ def test_the_command_and_the_extra_args_are_inspected_together():
 
     result = RunResult(0, "", "", None, None, argv=("tests/unit",), cwd=".", command="poetry run pytest")
     assert evidence.scope_of_run(result).narrowed is True
+
+
+# --- parse_run_output: quiet summaries followed by other output ------------
+#
+# `pytest -q` prints its tally undecorated, and that form is only trusted on
+# the last line of the output. That rule is right for pytest's own output,
+# but the Bash tool hands over the whole shell command's output, so anything
+# printed after pytest pushed the summary off the last line and the run was
+# silently never recorded. Measured across real sessions: 62 of 232 runs.
+
+from claim_check.evidence import parse_run_output  # noqa: E402
+
+# The exact output that went unrecorded on 2026-10-28.
+_OBSERVED_2026_10_28 = (
+    "## main...origin/main [ahead 71, behind 71]\n"
+    "1d63b0f Document that a claim formatted like output is ignored\n"
+    '  "version": "0.6.0",\n'
+    "443 passed in 9.40s\n"
+    "0.6.0\n"
+)
+_OBSERVED_COMMAND = (
+    'cd "/c/Claude Code/projects/claim-check" && git status -sb | head -1 && '
+    "python -m pytest -q 2>&1 | tail -1 && ls cache/"
+)
+
+
+def test_a_quiet_summary_followed_by_other_output_is_recorded():
+    counts = parse_run_output(_OBSERVED_2026_10_28, _OBSERVED_COMMAND)
+    assert counts is not None
+    assert counts.passed == 443
+
+
+def test_pytest_q_followed_by_an_exit_code_echo_is_recorded():
+    counts = parse_run_output("....\n12 passed in 0.31s\nexit=0\n", "pytest -q; echo exit=$?")
+    assert counts is not None and counts.passed == 12
+
+
+def test_a_stray_tally_is_not_evidence_when_the_command_never_ran_pytest():
+    # Without the command check, `cat notes.md` containing an old tally would
+    # be stored as a real run.
+    assert parse_run_output("notes\n12 passed in 0.31s\nmore notes\n", "cat notes.md") is None
+
+
+def test_several_quiet_tallies_not_on_the_last_line_are_ambiguous():
+    # Real case: one script running several separate scratch suites. Taking
+    # the last tally would store a scratch suite's result as this project's.
+    output = "22 passed in 0.02s\nok ACCEPT\n1 failed, 22 passed in 0.09s\nok BLOCK\n"
+    assert parse_run_output(output, "bash run_scenarios.sh && python -m pytest -q") is None
+
+
+def test_a_decorated_summary_with_trailing_output_is_unchanged():
+    output = "===== 7 passed in 1.00s =====\ndone\n"
+    counts = parse_run_output(output, "python -m pytest; echo done")
+    assert counts is not None and counts.passed == 7
+
+
+def test_a_quiet_summary_on_the_last_line_still_needs_no_command_match():
+    # Wrappers like `make test` are recognised from the output alone when the
+    # summary is last. Only the newly accepted case needs the command check.
+    counts = parse_run_output("....\n9 passed in 0.10s\n", "make test")
+    assert counts is not None and counts.passed == 9
+
+
+def test_record_run_stores_the_run_that_went_unrecorded(project):
+    record = evidence.record_run(project, "s1", _OBSERVED_COMMAND, _OBSERVED_2026_10_28)
+    assert record is not None
+    assert record["counts"]["passed"] == 443
+
+
+# --- load_fresh_nearby: finding a run filed under a nested directory -------
+#
+# Measured across real sessions: 13 of 57 claims looked for evidence under a
+# different directory from the one the run was filed under, and in every
+# case one directory was inside the other.
+
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    root = tmp_path / "workspace"
+    for name in ("p1", "p2"):
+        (root / name / "sub").mkdir(parents=True)
+        (root / name / "test_a.py").write_text("def test_a(): pass\n", encoding="utf-8")
+    return root
+
+
+def test_a_run_in_the_project_is_found_from_the_parent_folder(workspace):
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    record = evidence.load_fresh_nearby(workspace, "s1")
+    assert record is not None
+    assert evidence.counts_from_record(record).passed == 22
+
+
+def test_a_run_in_the_project_is_found_from_a_subfolder(workspace):
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace / "p1" / "sub", "s1") is not None
+
+
+def test_runs_in_two_nested_projects_are_ambiguous(workspace):
+    # Picking one could check a claim about p1 against the suite of p2.
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    evidence.record_run(workspace / "p2", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_a_run_in_an_unrelated_directory_is_never_used(workspace, tmp_path):
+    elsewhere = tmp_path / "scratch"
+    elsewhere.mkdir()
+    evidence.record_run(elsewhere, "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_a_nearby_run_still_has_to_be_fresh(workspace):
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    (workspace / "p1" / "test_new.py").write_text("def test_b(): pass\n", encoding="utf-8")
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_another_sessions_nearby_run_is_never_used(workspace):
+    evidence.record_run(workspace / "p1", "other-session", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1") is None
+
+
+def test_a_run_in_the_same_directory_still_wins_directly(workspace):
+    evidence.record_run(workspace, "s1", "python -m pytest", PASSING_OUTPUT)
+    evidence.record_run(workspace / "p1", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(workspace, "s1")["cwd"] == str(workspace)
+
+
+
+# --- shell_tokens: scope must survive operators glued to a word ------------
+#
+# shlex.split keeps "-q;" as one token, so in `pytest -q; echo exit=$?` the
+# echo looked like extra pytest arguments and the run was marked scoped,
+# which made it useless for a whole-suite claim. A punctuation-aware lexer
+# fixes that but splits `2>&1` into "2", ">&", "1", and the stray "2" then
+# looks like a test path. Both cases are pinned here.
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest -q; echo exit=$?",
+    "python -m pytest -q 2>&1 | tail -1",
+    'cd "/c/Claude Code/projects/x" && python -m pytest -q 2>&1 | tail -1 && ls',
+    "python -m pytest -q>out.txt",
+    "python -m pytest&&echo ok",
+    # Found by replaying real commands: the redirect target must stay with
+    # its redirect, or it leaks into the next command as a "test path".
+    "grep -rn x src 2>/dev/null\npy -3 -m pytest -q",
+    "python -m pytest -q > log.txt; cat log.txt",
+    # Also found by replay: an apostrophe in a heredoc commit message is not
+    # a quoting error, and must not make the whole line unparseable.
+    "python -m pytest -q 2>&1 | tail -1 && git commit -F- <<'MSG'\nit isn't done\nMSG",
+    # Valid bash, and the exact shape of this project's own commits: more
+    # commands on the heredoc's opening line.
+    "python -m pytest -q 2>&1 | tail -1 && git commit -F- <<'MSG' && git log -1\nit isn't done\nMSG",
+])
+def test_a_whole_suite_run_stays_unscoped_whatever_follows_it(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is False
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest -k slow; echo done",
+    "python -m pytest tests/unit&&echo ok",
+    "python -m pytest tests/unit 2>&1 | tail -1",
+])
+def test_a_narrowed_run_stays_scoped_whatever_follows_it(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is True
+
+
+def test_an_unparseable_command_has_no_tokens():
+    assert evidence.shell_tokens('python -m pytest "unbalanced') == []
+
+
+def test_a_quiet_run_with_a_trailing_echo_is_recorded_as_whole_suite(project):
+    record = evidence.record_run(
+        project, "s1", "python -m pytest -q; echo exit=$?", "....\n12 passed in 0.31s\nexit=0\n"
+    )
+    assert record is not None
+    assert record["scoped"] is False
+
+
+
+# --- project_root: what "the project" is --------------------------------
+#
+# Found by smoke-testing 0.7.0 before release: running the commit hook's suite in the folder
+# a command cd'd into made `cd docs && git commit -m "6 passed"` run pytest
+# in docs/, find no tests, and DENY a true claim. And looking for evidence in
+# any nested folder let a nested demo project's 2-test run be held against a
+# claim about the 6-test project around it.
+
+
+def _mkproject(path, marker="pyproject.toml"):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / marker).write_text("", encoding="utf-8")
+    return path
+
+
+def test_a_folder_with_a_config_file_is_its_own_project_root(tmp_path):
+    repo = _mkproject(tmp_path / "repo")
+    assert evidence.project_root(repo) == repo.resolve()
+
+
+def test_a_plain_subfolder_belongs_to_the_project_above_it(tmp_path):
+    repo = _mkproject(tmp_path / "repo")
+    (repo / "docs" / "deep").mkdir(parents=True)
+    assert evidence.project_root(repo / "docs" / "deep") == repo.resolve()
+
+
+def test_a_nested_project_is_its_own_root(tmp_path):
+    repo = _mkproject(tmp_path / "repo")
+    demo = _mkproject(repo / "examples" / "demo")
+    assert evidence.project_root(demo) == demo.resolve()
+
+
+def test_the_top_of_a_git_repository_is_a_project_root(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pkg").mkdir()
+    assert evidence.project_root(repo / "pkg") == repo.resolve()
+
+
+def test_a_folder_outside_any_project_has_no_root(tmp_path):
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    if evidence.project_root(tmp_path) is None:
+        assert evidence.project_root(loose) is None
+
+
+def test_a_nested_projects_run_is_not_evidence_for_the_project_around_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    repo = _mkproject(tmp_path / "repo")
+    demo = _mkproject(repo / "examples" / "demo")
+    evidence.record_run(demo, "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(repo, "s1") is None
+
+
+def test_a_run_in_a_plain_subfolder_of_the_same_project_is_still_found(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    repo = _mkproject(tmp_path / "repo")
+    (repo / "src").mkdir()
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    evidence.record_run(repo / "src", "s1", "python -m pytest", PASSING_OUTPUT)
+    assert evidence.load_fresh_nearby(repo, "s1") is not None
+
+
+
+# --- the relaxed path must not take a tally some other command printed ----
+#
+# Smoke test of 0.7.0 before release: "the command mentions pytest and the output holds one
+# tally" did not prove the tally came from pytest. A crashed pytest followed
+# by `cat last_run.log` recorded the old log's count as this run, unscoped,
+# where it could confirm a false claim or contradict a true one.
+
+_LOG_WITH_A_TALLY = "old notes\n100 passed in 3.00s\nmore notes\n"
+_CRASH = "INTERNALERROR> Traceback (most recent call last):\nINTERNALERROR> boom\n"
+
+
+@pytest.mark.parametrize("command, output", [
+    ("python -m pytest -q; cat last_run.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("cat last_run.log; python -m pytest -q", _LOG_WITH_A_TALLY + _CRASH),
+    ("python -m pytest -q; head -20 old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("python -m pytest -q; type old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("python -m pytest -q; grep passed old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ("python -m pytest -q; grep -v DEBUG old.log", _CRASH + _LOG_WITH_A_TALLY),
+    ('python -m pytest -q; echo "100 passed in 3.00s"', _CRASH + "100 passed in 3.00s\n"),
+    ("python -m pytest -q && git show HEAD", _CRASH + _LOG_WITH_A_TALLY),
+    ("echo pytest; cat old.log", _LOG_WITH_A_TALLY),
+    ("pip install pytest && cat old.log", _LOG_WITH_A_TALLY),
+    ("python -m pytest -q --co; python report.py", "3 tests collected in 0.01s\n" + _LOG_WITH_A_TALLY),
+])
+def test_a_tally_another_command_could_have_printed_is_not_this_run(command, output):
+    assert parse_run_output(output, command) is None
+
+
+@pytest.mark.parametrize("command", [
+    # The run that went unrecorded on 2026-10-28 and started this fix. Its
+    # grep pattern cannot match a tally line, so it cannot have printed one.
+    'cd "/c/Claude Code/projects/claim-check" && git log --oneline -5 && '
+    "grep '\"version\"' .claude-plugin/plugin.json && python -m pytest -q 2>&1 | tail -1 && ls cache/",
+    "python -m pytest -q; echo exit=$?",
+    "python -m pytest -q && git log --oneline -1",
+    "uv run pytest -q; echo done",
+    ".venv/Scripts/python.exe -m pytest -q; echo done",
+    "FOO=1 python -m pytest -q; echo done",
+    "py -3 -m pytest -q; echo done",
+    # Found replaying real sessions after tightening: these print nothing a
+    # tally could come from, and refusing them cost real evidence.
+    "cat >> notes.md <<'EOF'\nsome notes\nEOF\npython -m pytest -q; echo done",
+    "sed -i 's/a/b/' src/x.py && python -m pytest -q; echo done",
+    "grep -c passed old.log; python -m pytest -q; echo done",
+    "echo '=== expect 2 passed ===' && python -m pytest -q; echo done",
+])
+def test_a_genuine_run_followed_by_harmless_output_is_still_recorded(command):
+    output = '  "version": "0.6.0",\n12 passed in 0.31s\nsome trailing output\n'
+    counts = parse_run_output(output, command)
+    assert counts is not None and counts.passed == 12
+
+
+
+# --- redirects and line breaks ---------------------------------------------
+#
+# Smoke test of 0.7.0 before release, already true of 0.6.0: a redirect was read as the end
+# of the command, so test paths written after it were ignored and a narrowed
+# run looked like the whole suite. Bash allows arguments after a redirect.
+# And a line break is a command separator, unless it is a line continuation.
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest -q > out.txt tests/unit",
+    "python -m pytest -q >| out.txt tests/unit",
+    "python -m pytest -q &>> log tests/unit",
+    "python -m pytest -q <<< 'x' tests/unit",
+    "python -m pytest -q <(echo tests/unit)",
+    "python -m pytest -q 2>/dev/null tests/unit",
+    "python -m pytest \\\n  -q tests/unit",
+])
+def test_test_paths_after_a_redirect_or_a_continuation_still_narrow_the_run(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is True
+
+
+@pytest.mark.parametrize("command", [
+    "cd x\npython -m pytest -q",
+    "python -m pytest -q\necho done",
+    "git status\n\npython -m pytest -q 2>&1 | tail -1\necho done",
+    "python -m pytest \\\n  -q",
+])
+def test_a_line_break_separates_commands(command):
+    assert evidence.is_scoped(evidence.shell_tokens(command)) is False
+
+
+def test_a_declared_command_with_a_redirect_keeps_its_scope():
+    # scope_of_run tokenizes a declared --command with shlex.split, where a
+    # bare ">" and its target are separate tokens. The target is not a path.
+    import shlex
+    assert evidence.is_scoped(shlex.split("python -m pytest -q > log.txt")) is False
+    assert evidence.is_scoped(shlex.split("python -m pytest -q > log.txt tests/unit")) is True

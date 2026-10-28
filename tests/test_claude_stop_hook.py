@@ -357,3 +357,50 @@ def test_claim_check_verbose_is_gone(tmp_path):
     import inspect
     from claim_check.entrypoints import claude_stop_hook
     assert "CLAIM_CHECK_VERBOSE" not in inspect.getsource(claude_stop_hook)
+
+
+def test_a_claim_made_from_the_parent_folder_finds_the_projects_run(project, tmp_path):
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False, cwd=str(project.parent))
+    message = _message_of(out)
+    assert message is not None and "21" in message, "the false claim must be checked, not abstained on"
+
+
+def test_a_true_claim_made_from_the_parent_folder_is_silent(project, tmp_path):
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(project, tmp_path, "All done. 21 passed.", record=False, cwd=str(project.parent))
+    assert out == ""
+
+
+def test_runs_in_two_projects_are_reported_as_ambiguous_not_as_missing(project, tmp_path):
+    # Both runs are fresh and readable. A sentence saying none was recorded,
+    # or that it was stale, would be false, so the cause has to cover this.
+    other = project.parent / "other"
+    other.mkdir()
+    (other / "test_b.py").write_text("def test_b(): pass\n", encoding="utf-8")
+    evidence.record_run(project, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    evidence.record_run(other, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(project, tmp_path, "All done. 22 passed.", record=False, cwd=str(project.parent))
+    message = _message_of(out)
+    assert message is not None and "could not verify" in message
+    assert "more than one project" in message
+
+
+
+def test_a_nested_projects_run_is_reported_as_unverifiable_not_held_against_the_claim(tmp_path, monkeypatch):
+    # Smoke test of 0.7.0 before release: a repo with 6 tests holds a demo project with 2.
+    # Only the demo ran, and a true "All 6 tests pass" from the repo root was
+    # reported as "actual total is 2". It is unverified, not false. And since
+    # a run WAS recorded, the cause must not say none was.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    repo = tmp_path / "repo"
+    demo = repo / "examples" / "demo"
+    demo.mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("", encoding="utf-8")
+    (demo / "pyproject.toml").write_text("", encoding="utf-8")
+    evidence.record_run(demo, "s1", "python -m pytest", WHOLE_SUITE_OUTPUT)
+    code, out = _run(repo, tmp_path, "Done. All 6 tests pass.", record=False)
+    message = _message_of(out)
+    assert message is not None and "could not verify" in message
+    assert "none was recorded for this project" in message

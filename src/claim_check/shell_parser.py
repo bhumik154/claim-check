@@ -7,6 +7,7 @@ failure here is not evidence a claim is wrong, it's just evidence we
 couldn't check.
 """
 
+import bisect
 import re
 import shlex
 from typing import Optional
@@ -29,8 +30,12 @@ _HEREDOC_WRAPPED_RE = re.compile(
     r"(?P<body>.*?)\n(?P=delim)\s*\n?\s*\)",
     re.DOTALL,
 )
+# The rest of the opening line, `<<'MSG' && git log -1`, is ordinary shell
+# and is put back after the placeholder. Requiring the newline straight after
+# the delimiter left those heredocs unrecognised, so an apostrophe in the body
+# made the whole command unparseable.
 _HEREDOC_BARE_RE = re.compile(
-    r"<<-?\s*(?P<quote>['\"]?)(?P<delim>\w+)(?P=quote)\s*\n(?P<body>.*?)\n(?P=delim)\b",
+    r"<<-?\s*(?P<quote>['\"]?)(?P<delim>\w+)(?P=quote)(?P<rest>[^\n]*)\n(?P<body>.*?)\n(?P=delim)\b",
     re.DOTALL,
 )
 _UNRESOLVED_EXPANSION_RE = re.compile(r"\$\{|\$\(|\$[A-Za-z_]|`")
@@ -53,21 +58,72 @@ def _stash_heredocs(command: str):
     placeholders = {}
     state = {"unresolved": False, "counter": 0}
 
-    def _replace(m: re.Match) -> str:
-        body = m.group("body")
-        if not m.group("quote") and _UNRESOLVED_EXPANSION_RE.search(body):
+    def _stash(quote: str, body: str, rest: str) -> str:
+        if not quote and _UNRESOLVED_EXPANSION_RE.search(body):
             state["unresolved"] = True
         state["counter"] += 1
         key = f"\x00HEREDOC{state['counter']}\x00"
         placeholders[key] = body
-        return key
+        return key + rest
 
     # Wrapped form first: a bare heredoc pattern is a strict substring of
     # the wrapped one, so matching wrapped first prevents it from also
     # matching (incorrectly) as a bare heredoc missing its substitution.
-    rewritten = _HEREDOC_WRAPPED_RE.sub(_replace, command)
-    rewritten = _HEREDOC_BARE_RE.sub(_replace, rewritten)
+    rewritten = _HEREDOC_WRAPPED_RE.sub(lambda m: _stash(m.group("quote"), m.group("body"), ""), command)
+    rewritten = _sub_bare_heredocs(rewritten, _stash)
     return rewritten, placeholders, state["unresolved"]
+
+
+_HEREDOC_OPENER_RE = re.compile(r"<<-?\s*(?P<quote>['\"]?)(?P<delim>\w+)(?P=quote)")
+_LINE_START_WORD_RE = re.compile(r"\n(\w+)")
+
+
+def _sub_bare_heredocs(text: str, stash) -> str:
+    """The same rewrite as `_HEREDOC_BARE_RE.sub`, in linear time.
+
+    The regex searched forward through the rest of the command for a
+    terminator line once per `<<`, so a command with thousands of them and no
+    terminator took seconds (5.5 s measured, against 41 ms in 0.6.0), on a
+    path that runs for every Bash command. Here every line's first word is
+    indexed once, and each opener looks its terminator up directly.
+
+    The regex's backtracking is reproduced, since commit-message extraction
+    depends on the exact result: an unquoted delimiter is shortened, longest
+    first, until a terminator exists (`<<EOFX` with a line `EOF` closes at
+    `EOF`, keeping `X` as the rest of the opening line). A quoted one is
+    taken whole. tests/test_heredoc_stash.py checks this against the regex.
+    """
+    terminators = {}
+    for found in _LINE_START_WORD_RE.finditer(text):
+        terminators.setdefault(found.group(1), []).append(found.start())
+
+    pieces, kept_from, search_from = [], 0, 0
+    while True:
+        opener = _HEREDOC_OPENER_RE.search(text, search_from)
+        if opener is None:
+            break
+        newline = text.find("\n", opener.end())
+        match = None
+        if newline != -1:
+            quote, word = opener.group("quote"), opener.group("delim")
+            lengths = [len(word)] if quote else range(len(word), 0, -1)
+            for length in lengths:
+                delim = word[:length]
+                positions = terminators.get(delim, [])
+                i = bisect.bisect_right(positions, newline)
+                if i < len(positions):
+                    rest_start = opener.end() - (len(word) - length)
+                    match = (quote, delim, positions[i], rest_start)
+                    break
+        if match is None:
+            search_from = opener.start() + 1
+            continue
+        quote, delim, terminator, rest_start = match
+        pieces.append(text[kept_from:opener.start()])
+        pieces.append(stash(quote, text[newline + 1:terminator], text[rest_start:newline]))
+        kept_from = search_from = terminator + 1 + len(delim)
+    pieces.append(text[kept_from:])
+    return "".join(pieces)
 
 
 def _split_into_segments(tokens: list) -> list:
@@ -158,6 +214,86 @@ def _iter_message_values(tokens: list):
             i += 1
             continue
         i += 1
+
+
+_SHELL_PUNCTUATION = "();<>|&\n"
+
+
+def shell_tokens(command) -> list:
+    """Tokens of a shell line, with operators split off even when glued on.
+
+    `shlex.split` keeps "-q;" as one token, so in `pytest -q; echo exit=$?`
+    the echo read as extra pytest arguments and the run was marked scoped. A
+    punctuation-aware lexer splits that correctly, with three repairs:
+
+    - Redirects are reassembled into one token, file descriptor and target
+      included ("2>/dev/null", "2>&1", ">log.txt"). Split apart, the pieces
+      read as test paths. (Checked: `"" in "<>"` is True in Python, hence the
+      bool() guard below, or every bare number swallows the next token.)
+    - A line break is a command separator, as in the shell, so `cd x` and
+      `pytest` on separate lines are two commands, reported as ";". A line
+      continuation, backslash then newline, is joined first: splitting there
+      would detach `-q tests/unit` from `pytest` and make a narrowed run look
+      like the whole suite.
+    - Heredocs are set aside first: an apostrophe in a heredoc body is not a
+      quoting error, but the lexer reads it as one.
+
+    Returns [] for anything unparseable, which `is_scoped` reads as scoped.
+    """
+    if not isinstance(command, str):
+        return []
+    command, _bodies, _unresolved = _stash_heredocs(command)
+    command = command.replace("\\\r\n", " ").replace("\\\n", " ")
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        raw = list(lexer)
+    except ValueError:
+        return []
+    tokens = []
+    awaiting_target = False
+    for token in raw:
+        if "\n" in token and set(token) <= set(_SHELL_PUNCTUATION):
+            # A newline on its own separates commands; after an operator
+            # ("&&\n", "|\n") the operator already does.
+            tokens.append(token.replace("\n", "") or ";")
+            awaiting_target = False
+            continue
+        if awaiting_target:
+            tokens[-1] += token
+            awaiting_target = False
+            continue
+        if tokens and tokens[-1].isdigit() and token[:1] in "<>":
+            tokens[-1] += token
+        else:
+            tokens.append(token)
+        operator = tokens[-1].lstrip("0123456789")
+        awaiting_target = bool(operator) and (operator[0] in "<>" or operator.startswith("&>"))
+    return tokens
+
+
+def leading_cd_target(command: str) -> Optional[str]:
+    """The directory a command moves into before doing anything else.
+
+    The Bash tool reports the directory it was in, but `cd /repo && python
+    -m pytest` runs the suite somewhere else. Filing that run under the
+    reported directory put evidence where nothing later looked for it, and
+    made the commit hook run the suite in the parent folder.
+
+    Only a plain `cd <dir>` as the very first command counts. A cd later in
+    the line ran after other commands, a bare `cd` goes to the home
+    directory, and anything unparseable returns None.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return None
+    segments = _split_into_segments(shell_tokens(command))
+    if not segments:
+        return None
+    first = segments[0]
+    if len(first) == 2 and first[0] == "cd" and not first[1].startswith("-"):
+        return first[1]
+    return None
 
 
 def extract_commit_message(command: str) -> Optional[str]:
