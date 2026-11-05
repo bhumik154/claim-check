@@ -148,3 +148,11 @@ def test_an_assertion_still_survives_beside_a_vitest_tally():
     assert len(claims) == 1
     assert claims[0].kind == "all_pass"
     assert claims[0].claimed_total == 3
+
+
+def test_a_tests_heading_does_not_hide_the_count_on_the_next_line():
+    # The tally pattern matched whitespace across the line break, so a line
+    # reading just "Tests:" swallowed a genuine claim below it as if both were
+    # vitest output.
+    claims = conversation.extract_claims("Done.\n\nTests:\n22 passed.")
+    assert [(c.kind, c.claimed_passed) for c in claims] == [("n_passed", 22)]

@@ -404,3 +404,14 @@ def test_a_nested_projects_run_is_reported_as_unverifiable_not_held_against_the_
     message = _message_of(out)
     assert message is not None and "could not verify" in message
     assert "none was recorded for this project" in message
+
+
+def test_a_turn_that_only_quotes_example_claims_is_silent(project, tmp_path):
+    # A real end-of-turn message explaining the tool. The quoted examples are
+    # not claims, so there is nothing to report, not even "could not verify".
+    message = 'It checks test-count claims like "22 passed" or "all tests pass" against the runner.'
+    code, out = _run(project, tmp_path, message)
+    assert code == 0
+    assert out == ""
+    code, out = _run(project, tmp_path, message, record=False, session="no-evidence")
+    assert out == ""

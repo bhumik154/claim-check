@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import pytest
+
 from claim_check.claims import extract_claims
 
 
@@ -227,3 +231,89 @@ def test_last_claim_wins_when_two_n_of_m_claims_of_equal_specificity_repeat():
     assert claims[0].kind == "n_of_m"
     assert claims[0].claimed_passed == 15
     assert claims[0].claimed_total == 15
+
+
+# --- quoted examples are mentions, not claims --------------------------------
+#
+# Measured across every real end-of-turn message and commit message on the
+# author's machine: no genuine claim was ever written in double quotes, and
+# about 35 quoted ones were examples being discussed. Eight commits in this
+# project's own history would have been blocked for quoting an example.
+
+_FIXTURES = Path(__file__).parent / "fixtures" / "commit_messages"
+
+
+def test_a_real_commit_quoting_examples_is_judged_on_its_real_count():
+    # Commit 544a419: three quoted examples, then the true "370 passed." on
+    # its own line. The quoted "all 22 tests pass" used to outrank it on
+    # specificity, so the commit would have been blocked against a 370 run.
+    message = (_FIXTURES / "quoted_examples_then_real_count.txt").read_text(encoding="utf-8")
+    claims = extract_claims(message)
+    assert len(claims) == 1
+    assert claims[0].kind == "n_passed"
+    assert claims[0].claimed_passed == 370
+
+
+@pytest.mark.parametrize("message", [
+    'It checks test-count claims like "22 passed" or "all tests pass" against the runner.',
+    "normal users don't write \"22 passed\" in prose",
+    'a probe written as "the last full-suite run I observed\nwas 443 passed in 25.68s" was ignored',
+    "an honest “all 150 tests pass” got flagged",
+    "If I write 'all tests pass', I'm only giving an example.",
+    "The detector selects `all 22 tests pass`, then `22/22 passed`.",
+    'made `cd docs && git commit -m "6 passed"` run pytest in docs/',
+], ids=["examples", "prose", "wrapped", "curly", "single", "code-span", "nested"])
+def test_a_quoted_example_is_not_a_claim(message):
+    assert extract_claims(message) == []
+
+
+def test_a_count_written_only_in_a_code_span_is_not_checked():
+    # The accepted cost. Genuine counts were written this way three times in
+    # the measured corpus, examples about eight, and the text cannot tell the
+    # two apart. Missing a check is the safe direction.
+    assert extract_claims("Tests: `496 passed`.") == []
+
+
+def test_a_real_claim_beside_quoted_examples_is_the_one_checked():
+    message = (
+        'reports `1 passed, 1 deselected`, which makes "all tests pass" true of '
+        "what ran.\n\n370 passed."
+    )
+    claims = extract_claims(message)
+    assert [(c.kind, c.claimed_passed) for c in claims] == [("n_passed", 370)]
+
+
+@pytest.mark.parametrize("message, kind, passed, total", [
+    ("Type-check, lint, and all 61 tests pass.", "all_pass", None, 61),
+    ("`tsc` clean, `eslint` clean, 153/153 tests passing.", "n_of_m", 153, 153),
+    ("It's done and the tests' names are fixed.\n\n370 passed.", "n_passed", 370, None),
+], ids=["all-n", "ratio", "apostrophes"])
+def test_unquoted_claims_are_unchanged(message, kind, passed, total):
+    claims = extract_claims(message)
+    assert [(c.kind, c.claimed_passed, c.claimed_total) for c in claims] == [(kind, passed, total)]
+
+
+def test_quoted_runner_output_in_a_commit_message_is_not_a_claim():
+    # Two real commits here carried an indented vitest tally. A later real
+    # count masked it; without one, the files line read as "1 passed".
+    message = (
+        "Support vitest and jest\n\n"
+        "vitest prints two tallies:\n\n"
+        "    Test Files  1 failed | 1 passed (2)\n"
+        "         Tests  1 failed | 3 passed (4)\n"
+    )
+    assert extract_claims(message) == []
+
+
+def test_a_pasted_pytest_summary_in_a_commit_message_is_still_a_claim():
+    # Only chat strips a bare summary line. In a commit message a pasted
+    # summary is how people state the result.
+    claims = extract_claims("Fix the parser\n\n22 passed in 1.40s")
+    assert [(c.kind, c.claimed_passed) for c in claims] == [("n_passed", 22)]
+
+
+def test_a_tests_label_in_prose_is_a_claim_not_runner_output():
+    # Real vitest and jest tallies end in "(4)" or "6 total". A line that
+    # merely starts with "Tests:" is someone stating the result.
+    claims = extract_claims("Fix the parser\n\nTests: 22 passed")
+    assert [(c.kind, c.claimed_passed) for c in claims] == [("n_passed", 22)]

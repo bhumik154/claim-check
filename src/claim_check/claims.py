@@ -2,12 +2,14 @@
 
 Deliberately not NLP: a small, fully enumerable set of phrasings, each with
 an explicit guard against the false-positive shapes that actually show up
-in real commit messages (decimal numbers, issue references, negation).
+in real commit messages (decimal numbers, issue references, negation,
+quotation).
 """
 
 import re
 
 from .models import Claim
+from .quoting import merged, quoted_block_regions, quoted_regions
 
 # (?<![.\d#,]) blocks four false-positive shapes in one lookbehind: a digit
 # preceded by another digit (a partial match into a larger number), by "."
@@ -113,6 +115,21 @@ def _drop_enclosed(candidates: list[Claim]) -> list[Claim]:
     ]
 
 
+def _drop_quoted(candidates: list[Claim], regions: list[tuple[int, int]]) -> list[Claim]:
+    """Discards any candidate that touches quoted text.
+
+    A claim in quotation marks or a code span is an example being talked
+    about, not a result being reported: "It checks claims like "22 passed"",
+    "an honest "all 150 tests pass" got flagged". Overlap rather than
+    containment, so a half-quoted `"22/22" tests pass` goes too. Dropping only
+    ever removes a claim, never invents one.
+    """
+    return [
+        c for c in candidates
+        if not any(start < c.span[1] and c.span[0] < end for start, end in regions)
+    ]
+
+
 def extract_claims(message: str) -> list[Claim]:
     """Returns at most one Claim: the most specific one found in the
     message (n_of_m > all_pass > n_passed, per _KIND_SPECIFICITY), and
@@ -143,9 +160,16 @@ def extract_claims(message: str) -> list[Claim]:
     un-negated. Filtering negation first leaves that contained match alive
     and registers a claim from a message that explicitly denies one. Do not
     reorder these.
+
+    Last, any claim touching quoted material is dropped: a fenced or indented
+    block, a blockquote, another runner's tally, quotation marks or a code
+    span. That stage only ever removes claims, never invents one.
     """
     candidates = _drop_enclosed(_collect_candidates(message))
     candidates = [c for c in candidates if not _is_negated(message, c.span[0])]
+    candidates = _drop_quoted(
+        candidates, merged(quoted_block_regions(message) + quoted_regions(message))
+    )
 
     if not candidates:
         return []

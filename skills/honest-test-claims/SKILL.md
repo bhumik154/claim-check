@@ -53,6 +53,16 @@ not cover.
 State the scope when it is not the whole suite: "22 passed in `tests/unit`"
 rather than "22 passed".
 
+## Write the count as plain text
+
+State a result in plain prose: `443 passed.` or `All 443 tests pass.`, not
+inside quotation marks or backticks. Text in quotes or a code span reads as an
+example being discussed ("a claim like "22 passed""), and claim-check does not
+check it. A count you want verified has to look like a statement.
+
+The reverse holds too: when you are explaining or quoting a claim rather than
+making one, put it in quotes so it is not read as yours.
+
 ## What this skill does not ask
 
 It does not ask you to run the test suite before finishing every task. If you

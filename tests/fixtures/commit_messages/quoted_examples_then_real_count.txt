@@ -1,0 +1,36 @@
+Give the commit path a scope model
+
+A claim is about a scope; the tool only ever saw one invocation. When those
+differed it had no way to tell, so an honest "all 150 tests pass" got flagged
+whenever claim-check's own run happened to be narrower. That was the single
+likeliest reason to uninstall this.
+
+The information was already there and being thrown away. RunResult now
+reports the argv, cwd and command it actually used, evidence.scope_of_run
+turns that into a scope descriptor, and compare_claims takes it as an
+argument so the decision stays in the one file that owns policy.
+
+A narrowed run no longer contradicts a claim it cannot cover, and just as
+importantly no longer confirms one. `pytest -k test_a` on a file whose
+test_b fails reports "1 passed, 1 deselected", which makes "all tests pass"
+true of what ran while the suite is red. Agreeing there would launder a false
+claim into a verified one.
+
+Runs that were not narrowed are judged exactly as strictly as before, so
+"all 22 tests pass" against a real 21 is still caught. Abstention keys off
+positively detected narrowing, never off arithmetic.
+
+cli.py's verdict dispatch ended in a fall-through `return 1`, which would
+have turned every abstention into a block. Changed to an explicit blocking
+allowlist before the new status existed.
+
+Declared commands get the opposite bias from observed ones. An unrecognised
+runner in `--command "hatch run test"` must not read as narrowed, or every
+hatch and make user silently gets zero verification forever.
+
+The two tests that pinned these limitations now assert the fix, and both
+check the reason rather than the exit code, since abstaining and agreeing
+are indistinguishable from a 0.
+
+370 passed.
+
