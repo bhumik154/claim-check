@@ -259,10 +259,9 @@ def test_a_real_commit_quoting_examples_is_judged_on_its_real_count():
     "normal users don't write \"22 passed\" in prose",
     'a probe written as "the last full-suite run I observed\nwas 443 passed in 25.68s" was ignored',
     "an honest “all 150 tests pass” got flagged",
-    "If I write 'all tests pass', I'm only giving an example.",
     "The detector selects `all 22 tests pass`, then `22/22 passed`.",
     'made `cd docs && git commit -m "6 passed"` run pytest in docs/',
-], ids=["examples", "prose", "wrapped", "curly", "single", "code-span", "nested"])
+], ids=["examples", "prose", "wrapped", "curly", "code-span", "nested"])
 def test_a_quoted_example_is_not_a_claim(message):
     assert extract_claims(message) == []
 
@@ -317,3 +316,46 @@ def test_a_tests_label_in_prose_is_a_claim_not_runner_output():
     # merely starts with "Tests:" is someone stating the result.
     claims = extract_claims("Fix the parser\n\nTests: 22 passed")
     assert [(c.kind, c.claimed_passed) for c in claims] == [("n_passed", 22)]
+
+
+# --- a stale claim is never checked in place of a skipped one -----------------
+#
+# Found by the 0.8.0 smoke test. Each of these hid the real, up-to-date claim
+# as if it were quoted and fell back to an earlier, stale one, which blocked a
+# true commit that 0.7.0 let through.
+
+@pytest.mark.parametrize("message, expected", [
+    ('Was 3 passed. Then I fixed "the parser and all 5 tests pass.', "all 5 tests pass"),
+    ('Was 3 passed. Then "the fix\r\nand all 5 tests pass.', "all 5 tests pass"),
+    ('Was 3 passed. She said "the "x" thing. All 5 tests pass.', "All 5 tests pass"),
+    ("Was 3 passed. Press the ` key.\n\nAll 5 tests pass.\n\nSee `foo`.", "All 5 tests pass"),
+    ("Was 3 passed.\n\n```\nsome code\n\nAll 5 tests pass.", "All 5 tests pass"),
+    ("Results:\n  - before the fix only 3 passed, now\n    all 5 tests pass after the rewrite", "all 5 tests pass"),
+    ("Summary:\n- was 3 passed\n    - now all 5 tests pass", "all 5 tests pass"),
+    ("Was 3 passed. Er sagte „ok“ und all 5 tests pass.", "all 5 tests pass"),
+    ("Was 3 passed. 'cause of the fix all 5 tests pass in the users' suite.", "all 5 tests pass"),
+    ("Was 3 passed. Like the '90s, all 5 tests pass, it's fine'.", "all 5 tests pass"),
+], ids=["unclosed", "unclosed-crlf", "unbalanced-outer", "lone-backtick", "open-fence",
+        "continuation", "nested-bullet", "german", "cause", "nineties"])
+def test_the_up_to_date_claim_is_checked_not_a_stale_one(message, expected):
+    assert [c.raw_text for c in extract_claims(message)] == [expected]
+
+
+@pytest.mark.parametrize("message", [
+    'Was 3 passed. Now **"all 5 tests pass"** for real.',
+    "Was 3 passed. ``a` and all 5 tests pass `b``",
+    'Tests: 22 passed. The tool flags claims like "all 5 tests pass".',
+], ids=["emphasis", "odd-backticks", "real-then-example"])
+def test_skipping_a_quoted_claim_never_falls_back_to_an_earlier_one(message):
+    # When the claim that would have been checked is quoted, only a claim
+    # written after it may take its place. An earlier one is as likely to be
+    # the stale count the quoted text superseded, so nothing is checked. The
+    # last case is the price: a real count before an example goes unchecked.
+    assert extract_claims(message) == []
+
+
+def test_a_count_stated_before_pasted_output_is_still_checked():
+    # Pasted output is evidence, not a newer claim by the writer, so the rule
+    # against falling back to an earlier claim does not apply to it.
+    message = "Fix the parser\n\n22 passed.\n\n    Test Files  1 failed | 1 passed (2)\n"
+    assert [c.raw_text for c in extract_claims(message)] == ["22 passed"]

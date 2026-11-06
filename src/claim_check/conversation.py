@@ -29,13 +29,19 @@ from .claims import extract_claims as _extract_claims
 from .models import Claim
 from .quoting import strip_quoted_blocks
 
-# A line carrying pytest's own summary, decorated or not. These get pasted
-# without any block markup constantly, which is exactly the 3% case.
-_SUMMARY_LINE = re.compile(
-    r"^.*\b\d+\s+(?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected)\b"
-    r".*\bin\s+\d+(?:\.\d+)?s.*$",
-    re.MULTILINE,
+# A line carrying pytest's own summary, decorated or not: a count, then a
+# duration. These get pasted without any block markup constantly, which is
+# exactly the 3% case. Matched as two searches per line rather than one
+# pattern with two ".*", which took 16 seconds on one long line of counts.
+_SUMMARY_COUNT = re.compile(
+    r"\b\d+\s+(?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected)\b"
 )
+_SUMMARY_DURATION = re.compile(r"\bin\s+\d+(?:\.\d+)?s")
+
+
+def _is_summary_line(line: str) -> bool:
+    count = _SUMMARY_COUNT.search(line)
+    return bool(count) and bool(_SUMMARY_DURATION.search(line, count.end()))
 
 
 def strip_quoted_output(text: str) -> str:
@@ -45,8 +51,7 @@ def strip_quoted_output(text: str) -> str:
     matched by the summary-line pattern afterwards.
     """
     text = strip_quoted_blocks(text)
-    text = _SUMMARY_LINE.sub("", text)
-    return text
+    return "\n".join("" if _is_summary_line(line) else line for line in text.split("\n"))
 
 
 def extract_claims(text) -> List[Claim]:
@@ -58,4 +63,4 @@ def extract_claims(text) -> List[Claim]:
     """
     if not isinstance(text, str) or not text:
         return []
-    return _extract_claims(strip_quoted_output(text))
+    return _extract_claims(strip_quoted_output(text), blocks_removed=True)

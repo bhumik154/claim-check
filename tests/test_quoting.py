@@ -24,9 +24,9 @@ def quoted_texts(text):
     ("tests show `22 passed` here", ["`22 passed`"]),
     ("curly “all tests pass” here", ["“all tests pass”"]),
     ("curly ‘all tests pass’ here", ["‘all tests pass’"]),
-    ("single 'all tests pass' here", ["'all tests pass'"]),
+    ("German „all tests pass“ here", ["„all tests pass“"]),
     ('two "a" and "b"', ['"a"', '"b"']),
-], ids=["double", "code-span", "curly-double", "curly-single", "single", "two"])
+], ids=["double", "code-span", "curly-double", "curly-single", "german", "two"])
 def test_each_kind_of_quotation_is_found(text, expected):
     assert quoted_texts(text) == expected
 
@@ -46,16 +46,24 @@ def test_a_double_quote_spans_a_wrapped_line():
     assert quoted_texts(text) == ['"the last full-suite run I observed\nwas 443 passed in 25.68s"']
 
 
-def test_an_unclosed_double_quote_runs_to_the_end_of_its_paragraph_only():
-    # Safer to treat the rest of the paragraph as quoted than to guess where
-    # the quotation ends; a blank line is as far as that guess may reach.
-    text = 'He wrote "all tests pass and\nthen stopped.\n\n370 passed.'
-    assert quoted_texts(text) == ['"all tests pass and\nthen stopped.']
+@pytest.mark.parametrize("text", [
+    'Was 3 passed. Then I fixed "the parser and all 5 tests pass.',
+    'He wrote "all tests pass and\nthen stopped.\n\n370 passed.',
+    'He wrote "all tests pass\r\n\r\n370 passed.',
+    'Was 3 passed. “the parser and all 5 tests pass.',
+], ids=["same-line", "paragraph", "crlf", "curly"])
+def test_an_unclosed_quote_quotes_nothing(text):
+    # Guessing where an unclosed quotation ends is not safe in either
+    # direction: treating the rest of the paragraph as quoted hid the real
+    # "all 5 tests pass" and left the stale "3 passed" to be checked, which
+    # blocked a true commit. Found by the 0.8.0 smoke test, 1,996 times in a
+    # 40,000-message fuzz.
+    assert quoted_regions(text) == []
 
 
-def test_a_blank_line_with_crlf_also_ends_a_paragraph():
-    text = 'He wrote "all tests pass\r\n\r\n370 passed.'
-    assert quoted_texts(text) == ['"all tests pass']
+def test_a_closed_quote_inside_an_unclosed_one_is_still_quoted():
+    text = 'She said "the "all 5 tests pass" claim is wrong.\n\n4 passed.'
+    assert quoted_texts(text) == ['"all 5 tests pass"']
 
 
 def test_quote_marks_inside_a_code_span_are_not_quotation_marks():
@@ -78,17 +86,30 @@ def test_a_code_span_may_span_a_line_break():
     assert quoted_texts(text) == ["`22\npassed`"]
 
 
+def test_a_code_span_never_crosses_a_blank_line():
+    # Markdown's rule too. A lone backtick ("press the ` key") paired with
+    # one several paragraphs later and hid every claim in between.
+    text = "Was 3 passed. Press the ` key.\n\nAll 5 tests pass.\n\nSee `foo`."
+    assert quoted_texts(text) == ["`foo`"]
+
+
 @pytest.mark.parametrize("text", [
     "it's done, 370 passed",
     "the tests' names don't matter, 370 passed",
     "rock 'n' roll aside, 370 passed",
-], ids=["contraction", "possessive", "rock-n-roll"])
-def test_apostrophes_are_not_quotation(text):
-    assert all("370 passed" not in q for q in quoted_texts(text))
+    "'cause of the fix 370 passed in the users' suite",
+    "Like the '90s, 370 passed, it's fine'.",
+    "single 'all tests pass' here",
+], ids=["contraction", "possessive", "rock-n-roll", "cause", "nineties", "single-pair"])
+def test_straight_single_quotes_are_never_quotation(text):
+    # An apostrophe and a single quote are the same character, and "'cause"
+    # or "'90s" opened a quote that hid a real claim. No real example in the
+    # measured corpus was written in single quotes outside double ones.
+    assert quoted_regions(text) == []
 
 
-def test_a_single_quote_pair_must_stay_on_one_line():
-    text = "he said 'all\ntests pass' then"
+def test_a_curly_single_quote_pair_must_stay_on_one_line():
+    text = "he said ‘all\ntests pass’ then"
     assert quoted_regions(text) == []
 
 
@@ -138,3 +159,40 @@ def test_an_inch_mark_does_not_quote_the_rest_of_the_paragraph():
 def test_an_inch_mark_does_not_break_a_later_quotation():
     text = 'Fits a 5" screen, and "22 passed" is an example.'
     assert quoted_texts(text) == ['"22 passed"']
+
+
+@pytest.mark.parametrize("text", [
+    "\n" * 100_000 + "4 passed",
+    " \n" * 100_000,
+    ">\n" * 100_000,
+    "    x\n" * 50_000,
+    "1 passed. " * 10_000,
+], ids=["newlines", "space-lines", "quote-lines", "indented-lines", "many-claims"])
+def test_pathological_messages_are_handled_quickly(text):
+    # The blockquote pattern matched whitespace across line breaks: 100,000
+    # blank lines took 9 seconds on the commit path and 3 minutes in 0.7.0's
+    # end-of-turn check, whose budget is 10 seconds. Dropping enclosed claims
+    # compared every pair, so 10,000 claims took 20 seconds.
+    from claim_check import conversation
+    from claim_check.claims import extract_claims
+
+    start = time.perf_counter()
+    extract_claims(text)
+    conversation.extract_claims(text)
+    assert time.perf_counter() - start < 2.0
+
+
+@pytest.mark.parametrize("text", [
+    "1 passed " * 20_000,
+    "Tests " + "1 passed " * 20_000,
+], ids=["counts", "tests-label"])
+def test_one_long_line_of_counts_is_handled_quickly(text):
+    # The summary-line and tally patterns each had two ".*" on one line, so a
+    # single 180 KB line took 16 seconds in the end-of-turn check.
+    from claim_check import conversation
+    from claim_check.claims import extract_claims
+
+    start = time.perf_counter()
+    extract_claims(text)
+    conversation.extract_claims(text)
+    assert time.perf_counter() - start < 2.0

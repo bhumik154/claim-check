@@ -13,9 +13,15 @@ examples, and nothing in the text tells the two apart. They are treated as
 quotation all the same: missing a check is the safe direction, and the
 honest-test-claims skill tells agents to state counts as plain prose.
 
-One pass per kind of quotation, each linear in the length of the text. This
-runs inside hooks with a time budget, and a regex with nested quantifiers
-already went quadratic once in this project.
+Every rule here only marks text it is sure of. A quotation that is never
+closed marks nothing, a code span never crosses a blank line, and straight
+single quotes are not quotation at all. The 0.8.0 smoke test showed why:
+each guess about where a quotation ends hid a real claim somewhere, and an
+earlier, stale claim got checked in its place.
+
+Everything is linear in the length of the text. This runs inside hooks with a
+time budget, and patterns that matched whitespace across line breaks took
+minutes on a message of blank lines.
 """
 
 import bisect
@@ -24,17 +30,19 @@ from typing import List, Tuple
 
 Region = Tuple[int, int]
 
-# A fenced block, closed or not. An unterminated fence swallows everything
-# after it on purpose: if the quotation has no end, there is no way to tell
-# where prose resumes, and missing a claim costs a check while inventing one
-# costs the user's trust.
+# A fenced block, closed or not, for chat text. An unterminated fence there
+# swallows everything after it: a chat turn pastes output constantly, and the
+# claim selection refuses to fall back to an earlier claim if this hides a
+# later one.
 _FENCED = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
 
-# Markdown's indented code block.
-_INDENTED = re.compile(r"^(?: {4}|\t).*$", re.MULTILINE)
+# A closed fenced block. Commit messages only mark what is certainly quoted.
+_FENCED_CLOSED = re.compile(r"```.*?```", re.DOTALL)
 
-# A quotation of someone or something else.
-_BLOCKQUOTE = re.compile(r"^\s*>.*$", re.MULTILINE)
+# A quotation of someone or something else. Spaces and tabs only before the
+# marker: \s let the pattern start on every blank line and run to the next
+# ">" or not at all, which is quadratic in a message of blank lines.
+_BLOCKQUOTE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
 
 # Tallies from runners other than pytest. Captured from a real vitest 2.1.9
 # run, whose summary is two lines with no "in Xs" duration:
@@ -50,86 +58,123 @@ _BLOCKQUOTE = re.compile(r"^\s*>.*$", re.MULTILINE)
 # "Tests:" matched through the newline into the next line, so "Tests:" followed
 # by "22 passed" was removed as if it were vitest output. And the line has to
 # end the way a real tally does, vitest's "(4)" or jest's "6 total"; otherwise
-# a plain "Tests: 22 passed" is someone stating a result.
+# a plain "Tests: 22 passed" is someone stating a result. The count is checked
+# by a lookahead so the line is scanned once, not once per split point.
 _OTHER_RUNNER_TALLY = re.compile(
-    r"^[ \t]*(?:Test Files|Tests|Test Suites|Suites|Snapshots|Time)[ \t]*:?[ \t]+.*\b\d+[ \t]+"
-    r"(?:passed|failed|skipped|todo|pending|total)\b.*(?:\(\d+\)|\b\d+[ \t]+total)[ \t]*\r?$",
+    r"^[ \t]*(?:Test Files|Tests|Test Suites|Suites|Snapshots|Time)[ \t]*:?[ \t]+"
+    r"(?=[^\n]*?\b\d+[ \t]+(?:passed|failed|skipped|todo|pending|total)\b)"
+    r"[^\n]*(?:\(\d+\)|\b\d+[ \t]+total)[ \t]*\r?$",
     re.MULTILINE | re.IGNORECASE,
 )
 
+_PARAGRAPH_BREAK = re.compile(r"\r?\n[ \t]*\r?\n")
 _BACKTICK_RUN = re.compile(r"`+")
-_DOUBLE_OR_BREAK = re.compile(r"[\"“”]|\r?\n[ \t]*\r?\n")
-_SINGLE_OR_NEWLINE = re.compile(r"['‘’\n]")
-_OPENS_AFTER = set(" \t\r\n([{")
+_DOUBLE_OR_BREAK = re.compile(r"[\"“”„]|\r?\n[ \t]*\r?\n")
+_CURLY_SINGLE_OR_NEWLINE = re.compile(r"[‘’\n]")
 
 
 def strip_quoted_blocks(text: str) -> str:
-    """Removes whole blocks of quoted material: fenced and indented code,
-    blockquotes, and other runners' tallies.
+    """Removes whole blocks of quoted material from chat text: fenced and
+    indented code, blockquotes, and other runners' tallies.
 
     Order matters: fenced blocks go first, so their contents cannot be
     partially matched by the narrower patterns afterwards.
     """
     text = _FENCED.sub("\n", text)
     text = _BLOCKQUOTE.sub("", text)
-    text = _INDENTED.sub("", text)
+    text = _removed(text, _indented_lines(text))
     text = _OTHER_RUNNER_TALLY.sub("", text)
     return text
 
 
 def quoted_block_regions(text: str) -> List[Region]:
-    """The spans `strip_quoted_blocks` would remove, without removing them.
+    """Block quotation in a commit message, marked rather than removed.
 
-    The commit path marks blocks instead of deleting them. Deleting joins the
-    text on either side, and the claim patterns match across the join: "22",
-    an indented line, then "passed" becomes "22", a blank line, "passed", a
-    claim nobody wrote.
-    Marking can only ever remove a claim.
+    Deleting joins the text on either side, and the claim patterns match
+    across the join: "22", an indented line, then "passed" becomes "22", a
+    blank line, "passed", a claim nobody wrote. Marking can only ever remove
+    a claim.
     """
-    return [
-        m.span()
-        for pattern in (_FENCED, _BLOCKQUOTE, _INDENTED, _OTHER_RUNNER_TALLY)
-        for m in pattern.finditer(text)
-    ]
+    regions = [m.span() for m in _FENCED_CLOSED.finditer(text)]
+    regions += [m.span() for m in _BLOCKQUOTE.finditer(text)]
+    regions += _indented_lines(text)
+    regions += [m.span() for m in _OTHER_RUNNER_TALLY.finditer(text)]
+    return regions
 
 
 def quoted_regions(text) -> List[Region]:
     """Sorted, non-overlapping (start, end) spans of quoted text, quote marks
     included.
 
-    - A code span is a run of N backticks closed by the next run of exactly N,
-      as in Markdown. It may span lines. An unmatched run is literal text.
-    - Double quotes, straight or curly, pair in order within a paragraph, so a
-      quotation can wrap across lines. One left open runs to the end of its
-      paragraph: past that there is no telling where it ends.
-    - Single quotes, straight or curly, pair only on one line, and only where
-      they cannot be an apostrophe: the opener follows a space or bracket, the
-      closer is not followed by a letter or digit.
+    - A code span is a run of N backticks closed by the next run of exactly N
+      in the same paragraph, as in Markdown. An unmatched run is literal text.
+    - Double quotes, straight, curly or German, pair within a paragraph, so a
+      quotation can wrap across lines. One never closed marks nothing.
+    - Curly single quotes pair on one line. Straight single quotes are never
+      quotation: the same character is the apostrophe in "'cause" and "'90s".
 
-    Quote marks inside a code span, and single quotes inside double quotes,
-    are part of the outer quotation and not counted separately.
+    Quote marks inside a code span are part of the code span.
     """
     if not isinstance(text, str) or not text:
         return []
     code = _code_spans(text)
     doubles = _double_quotes(text, code)
-    singles = _single_quotes(text, sorted(code + doubles))
+    singles = _single_quotes(text, merged(code + doubles))
     return merged(code + doubles + singles)
 
 
 def merged(regions: List[Region]) -> List[Region]:
     """Sorted union of possibly overlapping regions. A code span inside a
     double quote, `"see `x` here"`, is one quotation."""
-    merged: List[Region] = []
+    result: List[Region] = []
     for start, end in sorted(regions):
-        if merged and start < merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        if result and start < result[-1][1]:
+            result[-1] = (result[-1][0], max(end, result[-1][1]))
         else:
-            merged.append((start, end))
-    return merged
+            result.append((start, end))
+    return result
+
+
+def _removed(text: str, regions: List[Region]) -> str:
+    if not regions:
+        return text
+    parts, last = [], 0
+    for start, end in regions:
+        parts.append(text[last:start])
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
+
+
+def _indented_lines(text: str) -> List[Region]:
+    """The lines of Markdown's indented code blocks.
+
+    As in Markdown, a block starts only after a blank line or at the top, and
+    runs through indented and blank lines. An indented line straight after
+    text is a continuation, and git commit bodies wrap bullets that way:
+    "  - before the fix only 3 passed, now" then "    all 5 tests pass".
+    """
+    regions = []
+    position = 0
+    previous_blank = True
+    in_block = False
+    for line in text.split("\n"):
+        end = position + len(line)
+        blank = not line.strip()
+        indented = line.startswith("    ") or line.startswith("\t")
+        if in_block and not (indented or blank):
+            in_block = False
+        if not in_block and indented and not blank and previous_blank:
+            in_block = True
+        if in_block and not blank:
+            regions.append((position, end))
+        previous_blank = blank
+        position = end + 1
+    return regions
 
 
 def _code_spans(text: str) -> List[Region]:
+    breaks = [m.start() for m in _PARAGRAPH_BREAK.finditer(text)]
     runs = [(m.start(), m.end()) for m in _BACKTICK_RUN.finditer(text)]
     by_length = {}
     for index, (start, end) in enumerate(runs):
@@ -145,6 +190,10 @@ def _code_spans(text: str) -> List[Region]:
             index += 1
             continue
         closer = same[later]
+        if bisect.bisect_right(breaks, start) != bisect.bisect_right(breaks, runs[closer][0]):
+            # The match is in another paragraph, so nothing in this one is.
+            index += 1
+            continue
         spans.append((start, runs[closer][1]))
         index = closer + 1
     return spans
@@ -167,7 +216,7 @@ class _Outside:
 
 
 def _double_quotes(text: str, code: List[Region]) -> List[Region]:
-    """Outermost double-quoted regions.
+    """Every closed double-quoted region, nested ones included.
 
     Straight quotes are paired by which way they face, not just in order.
     Quoting a quotation is common in exactly the text this reads, "people
@@ -175,58 +224,56 @@ def _double_quotes(text: str, code: List[Region]) -> List[Region]:
     inner example outside every quote. A mark after a space facing a word
     opens; a mark after a word facing a space or punctuation closes. A mark
     that could only close, with nothing open, is ignored: that is the inch
-    mark in `5" screen`, which must not quote the rest of the paragraph.
+    mark in `5" screen`.
+
+    Whatever is still open at the end of a paragraph is discarded, and only
+    the quotations closed inside it count.
     """
     outside = _Outside(code)
     regions = []
-    depth = 0
-    start = 0
+    stack = []  # (start, kind): kind is '"', curly or German
     for m in _DOUBLE_OR_BREAK.finditer(text):
         position = m.start()
         if not outside(position):
             continue
         mark = m.group()
         if len(mark) > 1:
-            # A blank line: whatever is still open ends with its paragraph.
-            if depth:
-                regions.append((start, position))
-                depth = 0
+            stack.clear()
+            continue
+        top = stack[-1][1] if stack else None
+        if mark == "„":
+            stack.append((position, "german"))
             continue
         if mark == "“":
-            opens = True
-        elif mark == "”":
-            opens = False
-        else:
-            before = text[position - 1] if position else " "
-            after = text[position + 1] if position + 1 < len(text) else " "
-            can_open = (before.isspace() or before in "([{") and not after.isspace()
-            can_close = not before.isspace() and not (after.isalnum() or after == "_")
-            if can_open and not can_close:
-                opens = True
-            elif can_close and not can_open:
-                if not depth:
-                    continue
-                opens = False
+            if top == "german":
+                regions.append((stack.pop()[0], position + 1))
             else:
-                opens = not depth
-        if opens:
-            if not depth:
-                start = position
-            depth += 1
-        elif depth:
-            depth -= 1
-            if not depth:
-                regions.append((start, position + 1))
-    if depth:
-        regions.append((start, len(text)))
+                stack.append((position, "curly"))
+            continue
+        if mark == "”":
+            if top in ("curly", "german"):
+                regions.append((stack.pop()[0], position + 1))
+            continue
+        before = text[position - 1] if position else " "
+        after = text[position + 1] if position + 1 < len(text) else " "
+        can_open = (before.isspace() or before in "([{") and not after.isspace()
+        can_close = not before.isspace() and not (after.isalnum() or after == "_")
+        if can_open and not can_close:
+            stack.append((position, '"'))
+        elif top == '"':
+            regions.append((stack.pop()[0], position + 1))
+        elif not can_close:
+            stack.append((position, '"'))
     return regions
 
 
 def _single_quotes(text: str, quoted: List[Region]) -> List[Region]:
+    """Curly single quotation on one line. The closer must not be followed by
+    a letter, since the same character is the apostrophe in "it’s"."""
     outside = _Outside(quoted)
     regions = []
-    opened = None  # (start, closing character)
-    for m in _SINGLE_OR_NEWLINE.finditer(text):
+    opened = None
+    for m in _CURLY_SINGLE_OR_NEWLINE.finditer(text):
         position = m.start()
         mark = m.group()
         if mark == "\n":
@@ -234,14 +281,11 @@ def _single_quotes(text: str, quoted: List[Region]) -> List[Region]:
             continue
         if not outside(position):
             continue
-        after = text[position + 1] if position + 1 < len(text) else ""
-        if opened is not None and mark == opened[1] and not (after.isalnum() or after == "_"):
-            regions.append((opened[0], position + 1))
-            opened = None
+        if mark == "‘":
+            opened = position
             continue
-        before = text[position - 1] if position else " "
-        if mark in "'‘" and before in _OPENS_AFTER and after and not after.isspace():
-            # A later valid opener replaces an earlier one that never closed,
-            # so one stray mark cannot hide the rest of its line.
-            opened = (position, "'" if mark == "'" else "’")
+        after = text[position + 1] if position + 1 < len(text) else ""
+        if opened is not None and not (after.isalnum() or after == "_"):
+            regions.append((opened, position + 1))
+            opened = None
     return regions

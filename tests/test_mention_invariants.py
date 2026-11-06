@@ -17,11 +17,13 @@ import random
 import pytest
 
 from claim_check import conversation
+from claim_check.quoting import merged, quoted_block_regions
 from claim_check.claims import _KIND_SPECIFICITY, _collect_candidates, _drop_enclosed, _is_negated, extract_claims
 
 _CLAIMS = ["22 passed", "all tests pass", "all 5 tests pass", "3/4 tests passing", "15/15 passed", "not 22 passed"]
 _WORDS = ["the", "suite", "now", "it's", "tests'", "claims", "like", "fixed", "e.g.", "(see", "it)", "5.", "#12", "1,022"]
-_QUOTING = ['"', "'", "`", "``", "```", "“", "”", "‘", "’", "\n    ", "\n> ", "\n\tTests  1 failed | 3 passed (4)"]
+_QUOTING = ['"', '"', "'", "`", "``", "```", "\u201c", "\u201d", "\u201e", "\u2018", "\u2019", "**",
+            "\n    ", "\n    - ", "\n  - ", "\n> ", "\n\tTests  1 failed | 3 passed (4)"]
 _SPACING = [" ", " ", " ", "\n", "\n\n", "\r\n"]
 
 
@@ -82,3 +84,61 @@ def test_a_message_without_quotation_is_judged_exactly_as_before():
 ], ids=["indented", "blockquote", "fence"])
 def test_quoted_blocks_do_not_join_the_text_around_them_into_a_claim(message):
     assert extract_claims(message) == []
+
+
+def _selection_outside_blocks(message):
+    # The rule guards against inline quotes hiding the writer's own newer
+    # claim. Pasted blocks are output, so it starts from what they leave.
+    regions = merged(quoted_block_regions(message))
+    kept = [
+        c for c in _old_candidates(message)
+        if not any(a < c.span[1] and c.span[0] < b for a, b in regions)
+    ]
+    if not kept:
+        return []
+    return [max(kept, key=lambda c: (_KIND_SPECIFICITY[c.kind], c.span[0]))]
+
+
+def _is_no_earlier(new, old):
+    if not new:
+        return True
+    if not old:
+        return False
+    return new[0] == old[0] or new[0].span[0] > old[0].span[0]
+
+
+def test_a_commit_message_never_falls_back_to_an_earlier_claim():
+    # The 0.8.0 smoke test found 1,996 generated messages where skipping a
+    # wrongly-quoted claim left an earlier, stale one to be checked. Whatever
+    # is checked now is what was checked before, nothing, or a later claim.
+    for seed in _SEEDS:
+        message = _message(random.Random(seed), quoting=True)
+        assert _is_no_earlier(extract_claims(message), _selection_outside_blocks(message)), (seed, message)
+
+
+def test_a_chat_turn_never_falls_back_to_an_earlier_claim():
+    for seed in _SEEDS:
+        text = _message(random.Random(seed), quoting=True)
+        old = _old_selection(conversation.strip_quoted_output(text))
+        assert _is_no_earlier(conversation.extract_claims(text), old), (seed, text)
+
+
+def _encloses_by_brute_force(outer, inner):
+    if outer.span[0] > inner.span[0] or outer.span[1] < inner.span[1]:
+        return False
+    if outer.span != inner.span:
+        return True
+    return _KIND_SPECIFICITY[outer.kind] > _KIND_SPECIFICITY[inner.kind]
+
+
+def test_the_enclosure_sweep_agrees_with_comparing_every_pair():
+    # The sweep replaced an all-pairs comparison that took 20 seconds on
+    # 10,000 claims. Both must drop exactly the same candidates.
+    for seed in _SEEDS:
+        message = _message(random.Random(seed), quoting=True)
+        candidates = _collect_candidates(message)
+        expected = [
+            c for c in candidates
+            if not any(_encloses_by_brute_force(o, c) for o in candidates if o is not c)
+        ]
+        assert _drop_enclosed(candidates) == expected, (seed, message)
