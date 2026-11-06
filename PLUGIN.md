@@ -196,7 +196,7 @@ unusable.
 
 The bar for saying anything is deliberately high. All of these must hold:
 
-- the final message asserts a count, after quoted output is stripped out
+- the final message asserts a count, outside quotes, code spans and pasted output
 - fresh evidence exists from this same session
 - that run covered the whole suite, not a `-k` filtered subset
 - that run reported no errors
@@ -211,6 +211,12 @@ Quoted output is stripped first because agents paste pytest's summary line
 constantly, and flagging someone for accurately quoting output would be the
 worst kind of false positive. Measured across 5,724 real assistant turns,
 that stripping removes 3% of raw detections and keeps the rest.
+
+A count inside quotation marks or backticks is treated the same way: as an
+example being discussed, not a result being reported. An agent explaining the
+tool writes "claims like "22 passed"" all the time, and checking that would
+report a falsehood nobody stated. To have a count checked, state it as plain
+text: 443 passed.
 
 When a claim cannot be checked, the end-of-turn hook now says so rather than
 staying quiet, and names the reason: either no whole-suite test run for this

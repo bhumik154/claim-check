@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 
 from claim_check.entrypoints import claude_hook as claude_hook_module
 from claim_check.entrypoints.claude_hook import main
@@ -436,3 +437,21 @@ def test_a_commit_from_a_subfolder_runs_the_suite_at_the_project_root(monkeypatc
     monkeypatch.setattr(claude_hook_module, "run_pytest", fake_run_pytest)
     main(_payload('cd docs && git commit -m "22 passed"', cwd=str(repo)), argv=[])
     assert os.path.samefile(seen["cwd"], repo)
+
+
+def test_a_commit_quoting_examples_is_judged_on_its_real_count(monkeypatch, capsys):
+    # Commit 544a419 in this project: quoted examples, then the true count.
+    # The quoted "all 22 tests pass" used to be checked instead, and the
+    # commit was denied against its own 370-test suite.
+    message = (
+        Path(__file__).parent / "fixtures" / "commit_messages" / "quoted_examples_then_real_count.txt"
+    ).read_text(encoding="utf-8").strip()
+    monkeypatch.setattr(
+        claude_hook_module,
+        "run_pytest",
+        lambda cwd, **kwargs: result_from_captured_output(0, "============ 370 passed in 9.15s ============"),
+    )
+    command = "git commit -m \"$(cat <<'EOF'\n" + message + "\nEOF\n)\""
+    code = main(_payload(command), argv=[])
+    assert code == 0
+    assert capsys.readouterr().out == ""

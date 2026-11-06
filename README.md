@@ -50,7 +50,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.7.0
+    rev: v0.8.0
     hooks:
       - id: claim-check
 ```
@@ -66,7 +66,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.7.0
+pip install git+https://github.com/bhumik154/claim-check@v0.8.0
 ```
 
 ```bash
@@ -159,7 +159,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 555 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 637 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 This file is tested too. `scripts/readme_facts.py` pins the case count above, the version strings in the install instructions, and the supported-runner list, and it checks that the example messages below still regenerate from real code. Run `python scripts/readme_facts.py --fix` when a change makes one of them stale. It covers mechanical facts only: prose that quietly starts contradicting the code is still on a reviewer to catch.
 
@@ -206,6 +206,11 @@ The cases worth knowing about:
 | `claim-check-precommit` run by hand with a bad path | Fails open with a clear message, not a `FileNotFoundError` |
 | `claim-check-claude-hook` run bare in a terminal with nothing piped in | Exits immediately instead of hanging on `stdin.read()` |
 | A claim in a chat message beside pasted pytest output | The quotation is stripped before anything is looked for. Measured across 5,724 real assistant turns, that removes 3% of raw detections, all of them the agent quoting output rather than asserting a number |
+| A message that quotes example claims, `claims like "22 passed"`, then states the real count | Only the real count is checked. Replayed against every real commit and end-of-turn message on the author's machine: every result that changed was an example dropped or the real count taking its place, apart from the backtick cost described under "What this is not" |
+| Quotes inside quotes, a quotation wrapped across lines, an inch mark (`5" screen`), apostrophes | Read the way a person would. Quote marks are paired by which way they face, so `"people don't write "22 passed" in prose"` stays quoted and a stray inch mark doesn't swallow the rest of the paragraph |
+| A line reading just `Tests:` with the count on the next line | Checked. The vitest/jest tally pattern used to match across the line break and drop the count as if it were runner output |
+| A quote that is never closed, a lone backtick, a bullet wrapped onto an indented line, `'cause` and `'90s`, German `„quotes“` | None of these hide the claim next to them. An earlier build of this release treated each as quotation, skipped the real claim, and checked an older, stale one instead, blocking a true commit. Only quotation that is certainly closed counts now, and as a backstop a skipped claim is never replaced by one written before it: nothing is checked instead. A 150,000-message fuzz holds that rule with no exceptions |
+| 100,000 blank lines, one 180 KB line of counts, 10,000 claims in one message | Each handled in well under a second. In 0.7.0 the end-of-turn check took 3 minutes on the blank lines and 20 seconds on the claims, against a 10-second budget |
 | A 20 MB session transcript | Only the last 256 KB is read, in under 2 ms. Reading the whole file at the end of every turn is not an option |
 | vitest and jest tallies, captured from real runs | Both print a file-level tally *before* the test-level one (`Test Files`, `Test Suites`). Reading the first match reports a file count as a test count, so only the `Tests` line is ever used |
 | A runner whose own stated total disagrees with the parts | Rejected outright. Both JS runners state their total, so an unrecognised label makes the arithmetic disagree, and disagreement returns nothing rather than an undercount |
@@ -222,7 +227,9 @@ The cases worth knowing about:
 
 **It still doesn't know what "the full suite" means to you.** It knows when its own run was narrowed and abstains there, but directory-level narrowing and `testpaths` restrictions leave no trace in the output, so those go unnoticed. See the scope section above.
 
-**A claim written like output is ignored, including a true one.** Any line carrying both a count and a duration, `443 passed in 25.68s`, is treated as pasted runner output and dropped before anything is checked. So are fenced blocks, indented lines, blockquotes, and vitest or jest tallies. That is deliberate: quoting a summary line is not asserting it, and before the stripping existed roughly 3% of detections were an agent quoting its own test output back. The cost is real though. A genuine claim in that shape goes unchecked, and because the whole line is dropped, so does a real claim that happens to share a line with a pasted duration. It also means the cheapest way to slip a count past this tool is to format it like output. If you want a claim checked, write it as prose: "all 443 tests pass", not "443 passed in 25.68s".
+**A claim written like output is ignored, including a true one.** Any line in a chat message carrying both a count and a duration, `443 passed in 25.68s`, is treated as pasted runner output and dropped before anything is checked. That is deliberate: quoting a summary line is not asserting it, and before the stripping existed roughly 3% of detections were an agent quoting its own test output back. The cost is real though. A genuine claim in that shape goes unchecked, and because the whole line is dropped, so does a real claim that happens to share a line with a pasted duration. If you want a claim checked, write it as prose: all 443 tests pass, not 443 passed in 25.68s.
+
+**A claim in quotes or backticks is ignored, including a true one.** Commit messages and chat messages alike: anything inside quotation marks, a code span, a fenced or indented block, a blockquote, or a pasted vitest or jest tally is read as an example being talked about, not a result being reported. Across every real commit and end-of-turn message on the author's machine, not one genuine claim was ever written in double quotes, while about 35 quoted ones were examples, and seven commits in this project's own history would have been blocked for quoting one. Backticks cost something: three genuine counts were written as `496 passed`, against about eight examples, and nothing in the text tells them apart, so they go unchecked too. Straight single quotes are not treated as quotation at all, since the same character is an apostrophe. And when the claim that would have been checked is quoted, a claim written before it never takes its place, so a message like `Tests: 22 passed. It flags claims like "all 5 tests pass".` goes unchecked rather than risk checking a stale count. It also means quoting a count is a way to slip it past this tool. The honest-test-claims skill tells agents to state counts as plain text.
 
 **It isn't NLP.** It can't resolve tense or discourse. "Was at 15 passed, now 22/22" is genuinely ambiguous to a regex. Only one claim per message gets checked: the most specific kind, then the last one among ties. That covers a stale count corrected later, but a later sentence describing an earlier state can still slip through.
 
