@@ -179,3 +179,67 @@ def test_anything_but_a_plain_leading_cd_gives_no_target(command):
 
 def test_a_cd_on_its_own_line_is_still_a_leading_cd():
     assert leading_cd_target("cd proj\npython -m pytest -q") == "proj"
+
+
+# --- commands on separate lines (issue #6) -----------------------------------
+#
+# Reported by mattabate: extract_commit_message lexed a newline as plain
+# whitespace, so `git add -A` and `git commit -m ...` on separate lines were one
+# command starting with `git add`, and the claim was never checked. 6 of 133
+# real `git commit -m` commands on the author's machine had that shape.
+
+_HEREDOC_COMMIT = "git commit -m \"$(cat <<'EOF'\nFix it\n\n22 passed\nEOF\n)\""
+
+
+@pytest.mark.parametrize("command, expected", [
+    ('git add -A\ngit commit -m "22 passed"', "22 passed"),
+    ("git add -A\n" + _HEREDOC_COMMIT, "Fix it\n\n22 passed"),
+    ('git add -A\r\ngit commit -m "22 passed"', "22 passed"),
+    ('git add -A\n\n\ngit commit -m "22 passed"', "22 passed"),
+    ('cd repo\ngit commit -m "22 passed"', "22 passed"),
+    ('if true; then\n  git commit -m "22 passed"\nfi', "22 passed"),
+    ('git add .\ngit commit -m "Fix\n\n22 passed"', "Fix\n\n22 passed"),
+], ids=["add-then-commit", "heredoc", "crlf", "blank-lines", "cd-line", "if-block", "multi-line-message"])
+def test_a_commit_on_its_own_line_is_found(command, expected):
+    assert extract_commit_message(command) == expected
+
+
+@pytest.mark.parametrize("command, expected", [
+    ('# stage everything\ngit add -A\ngit commit -m "22 passed"', "22 passed"),
+    ('git add -A  # stage\ngit commit -m "22 passed"', "22 passed"),
+    ("# don't forget\ngit commit -m \"22 passed\"", "22 passed"),
+    ('git commit -m "fix #6, 22 passed"', "fix #6, 22 passed"),
+    ("git commit -m fix#6", "fix#6"),
+], ids=["comment-line", "trailing-comment", "apostrophe-in-comment", "hash-in-quotes", "hash-mid-word"])
+def test_comments_are_read_the_way_bash_reads_them(command, expected):
+    # shlex's comment reader also swallowed the newline after a comment, so a
+    # trailing `# stage` merged the next line back in, and it started a
+    # comment at a `#` in the middle of a word, which bash does not.
+    assert extract_commit_message(command) == expected
+
+
+def test_a_message_flag_on_the_next_line_without_a_continuation_is_not_passed():
+    # Without a backslash the shell runs `-m "22 passed"` as its own command,
+    # so git commit never receives that message.
+    assert extract_commit_message('git commit\n-m "22 passed"') is None
+    assert extract_commit_message('git commit \\n  -m "22 passed"') == "22 passed"
+
+
+def test_the_first_of_two_commits_on_separate_lines_is_used():
+    assert extract_commit_message('git commit -m "first"\ngit commit -m "second"') == "first"
+
+
+def test_shell_tokens_ends_a_command_at_a_trailing_comment():
+    from claim_check.shell_parser import shell_tokens
+    assert shell_tokens("pytest -q  # all of it\nls") == ["pytest", "-q", ";", "ls"]
+    assert shell_tokens("echo fix#6") == ["echo", "fix#6"]
+
+
+def test_a_megabyte_of_quotes_comments_and_newlines_is_lexed_quickly():
+    import random
+    import time
+    rng = random.Random(6)
+    command = "".join(rng.choice("#'\"\\n ab;") for _ in range(1_000_000))
+    start = time.perf_counter()
+    extract_commit_message(command)
+    assert time.perf_counter() - start < 2.0
