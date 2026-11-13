@@ -455,3 +455,18 @@ def test_a_commit_quoting_examples_is_judged_on_its_real_count(monkeypatch, caps
     code = main(_payload(command), argv=[])
     assert code == 0
     assert capsys.readouterr().out == ""
+
+
+def test_a_false_claim_in_a_commit_on_its_own_line_is_denied(monkeypatch, capsys):
+    # Issue #6: with `git add -A` on the line before, the commit was never
+    # recognised and a false count went through unchecked.
+    monkeypatch.setattr(
+        claude_hook_module,
+        "run_pytest",
+        lambda cwd, **kwargs: result_from_captured_output(0, "============ 21 passed in 0.15s ============"),
+    )
+    command = "git add -A\ngit commit -m \"$(cat <<'EOF'\nFix the parser\n\n22 passed\nEOF\n)\""
+    code = main(_payload(command), argv=[])
+    assert code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"

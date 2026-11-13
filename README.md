@@ -50,7 +50,7 @@ You don't need `pip install` for this one. The plugin ships its own source and r
 ```yaml
 repos:
   - repo: https://github.com/bhumik154/claim-check
-    rev: v0.8.0
+    rev: v0.8.1
     hooks:
       - id: claim-check
 ```
@@ -66,7 +66,7 @@ The hook uses `language: system` rather than `language: python`, on purpose. A `
 Not on PyPI yet, so install from the repo:
 
 ```bash
-pip install git+https://github.com/bhumik154/claim-check@v0.8.0
+pip install git+https://github.com/bhumik154/claim-check@v0.8.1
 ```
 
 ```bash
@@ -159,7 +159,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 637 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 654 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 This file is tested too. `scripts/readme_facts.py` pins the case count above, the version strings in the install instructions, and the supported-runner list, and it checks that the example messages below still regenerate from real code. Run `python scripts/readme_facts.py --fix` when a change makes one of them stale. It covers mechanical facts only: prose that quietly starts contradicting the code is still on a reviewer to catch.
 
@@ -191,6 +191,7 @@ The cases worth knowing about:
 | `INTERNALERROR>` with no summary line | Different from "0 tests ran". Fails open, commit proceeds |
 | The `git commit -m "$(cat <<'EOF' ... EOF)"` heredoc pattern | Extracted correctly end to end, and a wrong claim inside one is caught |
 | Unbalanced quotes, an unresolved `$VAR` in an unquoted heredoc, `git commit` inside an unrelated `echo` | All fail open or are ignored. A parse failure isn't evidence a claim is wrong |
+| `git add -A` and `git commit -m ...` on separate lines, a `# comment` on the line before, CRLF line endings | Checked. A newline used to read as plain whitespace, so the two lines were one command starting with `git add` and the claim was never checked: 6 of 133 real `git commit -m` commands on the author's machine. Reported in [#6](https://github.com/bhumik154/claim-check/issues/6). Checked against what real bash passes to git on 1,500 generated multi-line commands, with no disagreement |
 | `git -C <path> commit`, `git --no-pager commit` | Checked. git's own global options are skipped when finding the subcommand |
 | A full-suite claim against a deliberately scoped run | Abstains rather than judging, in both directions: a narrowed run can neither contradict nor confirm a claim about the whole suite |
 | A summary line printed by a test and replayed in the failure report | Can't forge the tally on its own. The last summary line *per session* wins, and a test's output always gets replayed before its own summary. See "What this is not" for the case that does get through |

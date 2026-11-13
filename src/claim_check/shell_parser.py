@@ -238,19 +238,90 @@ def shell_tokens(command) -> list:
     - Heredocs are set aside first: an apostrophe in a heredoc body is not a
       quoting error, but the lexer reads it as one.
 
+    - Comments are removed the way bash removes them. shlex's own comment
+      reader also swallowed the newline after a comment, merging the next
+      line back into the commented one, and started a comment at a `#` in
+      the middle of a word ("fix#6"), which bash does not.
+
     Returns [] for anything unparseable, which `is_scoped` reads as scoped.
     """
+    lexed = _lex(command)
+    return lexed[0] if lexed is not None else []
+
+
+_COMMENT_MAY_FOLLOW = set(" \t\r\n;&|()")
+
+
+def _strip_comments(command: str) -> str:
+    """Removes unquoted comments, keeping the newline that ends each one.
+
+    As in bash, `#` starts a comment only at the start of a word, and never
+    inside quotes or after a backslash. One pass, linear in the length.
+    """
+    out = []
+    quote = None
+    word_start = True
+    i = 0
+    n = len(command)
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            out.append(c)
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if c == "\\":
+            out.append(command[i : i + 2])
+            word_start = False
+            i += 2
+            continue
+        if quote == '"':
+            out.append(c)
+            if c == '"':
+                quote = None
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            out.append(c)
+            word_start = False
+            i += 1
+            continue
+        if c == "#" and word_start:
+            end = command.find("\n", i)
+            i = n if end == -1 else end
+            continue
+        out.append(c)
+        word_start = c in _COMMENT_MAY_FOLLOW
+        i += 1
+    return "".join(out)
+
+
+def _lex(command):
+    """The tokenizer shared by `shell_tokens` and `extract_commit_message`.
+
+    Returns (tokens, heredoc bodies, any unresolved expansion), or None when
+    the command cannot be parsed. Both parsers once lexed separately and
+    disagreed: the commit-message one read a newline as plain whitespace, so
+    `git add -A` and `git commit -m ...` on separate lines were one command
+    starting with `git add`, and the claim was never checked (issue #6).
+    """
     if not isinstance(command, str):
-        return []
-    command, _bodies, _unresolved = _stash_heredocs(command)
+        return None
+    command, bodies, unresolved = _stash_heredocs(command)
+    # Comments before continuations: in bash a backslash inside a comment is
+    # part of the comment, and the newline still ends it.
+    command = _strip_comments(command)
     command = command.replace("\\\r\n", " ").replace("\\\n", " ")
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
         lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
+        lexer.commenters = ""
         raw = list(lexer)
     except ValueError:
-        return []
+        return None
     tokens = []
     awaiting_target = False
     for token in raw:
@@ -270,7 +341,7 @@ def shell_tokens(command) -> list:
             tokens.append(token)
         operator = tokens[-1].lstrip("0123456789")
         awaiting_target = bool(operator) and (operator[0] in "<>" or operator.startswith("&>"))
-    return tokens
+    return tokens, bodies, unresolved
 
 
 def leading_cd_target(command: str) -> Optional[str]:
@@ -297,15 +368,11 @@ def leading_cd_target(command: str) -> Optional[str]:
 
 
 def extract_commit_message(command: str) -> Optional[str]:
-    stashed_command, heredocs, unresolved = _stash_heredocs(command)
-
-    try:
-        lexer = shlex.shlex(stashed_command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
+    lexed = _lex(command)
+    if lexed is None:
         # Unbalanced quotes or similar - can't confidently tokenize.
         return None
+    tokens, heredocs, unresolved = lexed
 
     segment = _find_git_commit_segment(_split_into_segments(tokens))
     if segment is None:
