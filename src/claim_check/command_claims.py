@@ -89,7 +89,9 @@ _HYPOTHETICAL = re.compile(
     r"wrong|false|goals?|criteria|next|todo|plan|steps?|verify|confirm|"
     r"assuming|provided|ideal|theoretically|per|according|yesterday|last|reference|"
     r"base|baseline|revert\w*|stash\w*|probably|maybe|perhaps|likely|apparently|"
-    r"presumably|reportedly|allegedly|ci)\b",
+    r"presumably|reportedly|allegedly|ci|"
+    # An imagined case: "In a perfect world, ...", "Works on paper, ...".
+    r"world|paper|principle|scenario|hypothetical\w*)\b",
     re.I,
 )
 _TO_BEFORE = re.compile(r"\bto\s*$", re.I)
@@ -149,7 +151,7 @@ _TAKEN_BACK = re.compile(
     r"previously|earlier|used to|in theory|on main|on master|upstream|ci|stops?|red|only|"
     r"base|baseline|parent|old|stash\w*|revert\w*|said|says|according|supposedly|"
     r"apparently|reportedly|allegedly|presumably|probably|maybe|perhaps|likely|"
-    r"theoretically|should|if)\b|"
+    r"theoretically|should|if|world|paper|principle|scenario|hypothetical\w*)\b|"
     + _FAILED,
     re.I,
 )

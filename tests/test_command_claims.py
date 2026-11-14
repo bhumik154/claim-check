@@ -288,3 +288,25 @@ def test_a_list_subject_is_a_known_loss():
     # "Lint, TypeScript, and `npm run build` are all clean" reads like any
     # other introduction before a comma. Missing it is the accepted cost.
     assert commands("Lint, TypeScript, and `npm run build` are all clean.") == []
+
+
+# --- round three, against the sign-off words ("All good, ...") ---------------
+
+@pytest.mark.parametrize("text", [
+    "In a perfect world, `make check` is green.",
+    "In a good world, `npm test` passes.",
+    "Good in principle, `tsc` is clean.",
+    "Works on paper, `make check` passes.",
+    "Perfect scenario, `tsc` is clean.",
+    "Nice idea, `make check` passes in that world.",
+    "Hypothetically speaking, `npm test` passes.",
+    "`make check` passes in principle.",
+    "`npm test` passes on paper.",
+])
+def test_an_idiom_of_an_imagined_case_is_not_a_claim(text):
+    assert commands(text) == []
+
+
+def test_a_sign_off_before_a_claim_still_reads():
+    assert commands("Perfect, `tsc` is clean.") == [("tsc",)]
+    assert commands("Great, `npm test` passes now.") == [("npm test",)]
