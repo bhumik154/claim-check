@@ -415,3 +415,85 @@ def test_a_turn_that_only_quotes_example_claims_is_silent(project, tmp_path):
     assert out == ""
     code, out = _run(project, tmp_path, message, record=False, session="no-evidence")
     assert out == ""
+
+
+# --- claims that a named command passed ----------------------------------------
+#
+# Report-only, like the rest of this hook, and silent unless the session's own
+# most recent run of exactly that command, against the current files, failed
+# in a way that can be pinned on it.
+
+from pathlib import Path  # noqa: E402
+
+from claim_check import run_log  # noqa: E402
+
+_TOOL_OUTPUTS = Path(__file__).parent / "fixtures" / "tool_outputs"
+
+
+def _failed_make_check(project):
+    output = (_TOOL_OUTPUTS / "make-check-fail.txt").read_text(encoding="utf-8")
+    run_log.record_call(project, "s1", "make check", output, "failed", 2)
+
+
+def test_a_command_claim_its_own_run_contradicts_is_reported(project, tmp_path):
+    _failed_make_check(project)
+    _, out = _run(project, tmp_path, "Done. `make check` passes.", record=False)
+    message = _message_of(out)
+    assert "make check" in message
+    assert "make: *** [Makefile:4: test] Error 1" in message
+    assert hook.CORRECTION_INSTRUCTION in message
+
+
+def test_a_command_claim_backed_by_a_passing_run_is_silent(project, tmp_path):
+    output = (_TOOL_OUTPUTS / "make-check-pass.txt").read_text(encoding="utf-8")
+    run_log.record_call(project, "s1", "make check", output, "ok")
+    _, out = _run(project, tmp_path, "Done. `make check` passes.", record=False)
+    assert out == ""
+
+
+def test_a_command_claim_with_no_run_at_all_is_silent(project, tmp_path):
+    # No "could not verify" for this claim type until its noise is measured.
+    _, out = _run(project, tmp_path, "Done. `make check` passes.", record=False)
+    assert out == ""
+
+
+def test_a_command_claim_rerun_green_after_failing_is_silent(project, tmp_path):
+    _failed_make_check(project)
+    output = (_TOOL_OUTPUTS / "make-check-pass.txt").read_text(encoding="utf-8")
+    run_log.record_call(project, "s1", "make check", output, "ok")
+    _, out = _run(project, tmp_path, "Done. `make check` passes.", record=False)
+    assert out == ""
+
+
+def test_a_quoted_command_claim_is_not_checked(project, tmp_path):
+    _failed_make_check(project)
+    _, out = _run(project, tmp_path, 'Agents often write "`make check` passes" without running it.', record=False)
+    assert out == ""
+
+
+def test_a_command_finding_and_a_count_finding_are_one_message(project, tmp_path):
+    _failed_make_check(project)
+    _, out = _run(project, tmp_path, "All done. 22 passed, and `make check` passes.")
+    message = _message_of(out)
+    assert "22 passed" in message and "make check" in message
+    assert message.count(hook.CORRECTION_INSTRUCTION) == 1
+
+
+def test_a_proof_ending_in_a_full_stop_is_not_doubled(project, tmp_path):
+    line = "src/bad.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n"
+    run_log.record_call(project, "s1", "npx tsc --noEmit 2>&1 | tail -40", line, "ok")
+    _, out = _run(project, tmp_path, "Done. `tsc` clean.", record=False)
+    message = _message_of(out)
+    assert "'number'. " in message and "'number'.." not in message
+
+
+def test_what_an_agent_writes_after_a_failure_is_silent(project, tmp_path):
+    # From the 0.9.0 smoke test: each of these became a false finding.
+    _failed_make_check(project)
+    for text in ["When `make check` passes, the deploy job runs.",
+                 "Next steps:\n1. Fix the test.\n2. Confirm `make check` passes.",
+                 "Expected: `make check` passes.",
+                 "`make check` passes `-race` to `go test`.",
+                 "Claude claimed `make check` passed. It hadn't."]:
+        _, out = _run(project, tmp_path, text, record=False)
+        assert out == "", text

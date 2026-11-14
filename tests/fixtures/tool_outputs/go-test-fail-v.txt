@@ -1,0 +1,8 @@
+=== RUN   TestGood
+--- PASS: TestGood (0.00s)
+=== RUN   TestBad
+    pkg_test.go:7: expected 2, got 3
+--- FAIL: TestBad (0.00s)
+FAIL
+FAIL	example.com/gofail/pkg	0.001s
+FAIL

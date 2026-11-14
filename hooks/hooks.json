@@ -1,5 +1,5 @@
 {
-  "description": "Verifies a test-count claim in a git commit message against a real pytest run before the commit is allowed through the Bash tool, and records the agent's own test runs so future claims can be checked without re-running the suite.",
+  "description": "Verifies a test-count claim in a git commit message against a real pytest run before the commit is allowed through the Bash tool. Records the agent's own runs, successful and failed, so claims at the end of a turn, a test count or that a named command passed, can be checked without running anything again.",
   "hooks": {
     "PreToolUse": [
       {
@@ -15,11 +15,23 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" claude_posttooluse_hook",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" claude_posttoolusefailure_hook",
             "timeout": 20
           }
         ]

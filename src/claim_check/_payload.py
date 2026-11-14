@@ -11,7 +11,7 @@ Shared by all three hook entry points so the guards cannot drift apart.
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from .shell_parser import leading_cd_target
 
@@ -89,6 +89,23 @@ def bash_command(payload: dict) -> Optional[str]:
     return command if isinstance(command, str) else None
 
 
+def shell_command(payload: dict) -> Optional[Tuple[str, str]]:
+    """(command, tool name) of a Bash or PowerShell tool call, or None.
+
+    PowerShell calls are read only to record that a command ran: on Windows
+    an agent reruns in PowerShell what failed in Bash, and without the rerun
+    the old failure still reads as the last run.
+    """
+    tool = payload.get("tool_name")
+    if tool not in ("Bash", "PowerShell"):
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
+    return (command, tool) if isinstance(command, str) else None
+
+
 def tool_stdout(payload: dict) -> Optional[str]:
     """Captured stdout of a completed tool call, or None.
 
@@ -115,3 +132,53 @@ def tool_stdout(payload: dict) -> Optional[str]:
 def session_id(payload: dict) -> str:
     value = payload.get("session_id")
     return value if isinstance(value, str) and value else "unknown"
+
+
+def tool_output(payload: dict) -> Optional[str]:
+    """Everything a completed Bash call printed: stdout, then stderr.
+
+    A tool's failure line is not always on stdout: make prints its
+    "make: *** ... Error" line on stderr.
+    """
+    for key in ("tool_response", "tool_result"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            parts = [value.get(name) for name in ("stdout", "stderr")]
+            parts = [part for part in parts if isinstance(part, str) and part]
+            return "\n".join(parts) if parts else None
+        if isinstance(value, str):
+            return value
+    return None
+
+
+_EXIT_CODE_RE = re.compile(r"^(?:Error: )?Exit code (\d+)\r?\n?")
+
+
+def tool_failure(payload: dict):
+    """(exit code or None, output) from a PostToolUseFailure payload, or None.
+
+    Claude Code 2.1.274 sends a failed Bash call there, never to PostToolUse,
+    with `error` reading "Exit code N" and then everything the call printed.
+    """
+    error = payload.get("error")
+    if not isinstance(error, str):
+        return None
+    match = _EXIT_CODE_RE.match(error)
+    if match is None:
+        return None, error
+    return int(match.group(1)), error[match.end():]
+
+
+def leading_cd_ok(payload: dict, command) -> bool:
+    """False only when the command starts with a `cd` whose directory does
+    not exist, so whatever followed it never ran."""
+    target = leading_cd_target(command) if isinstance(command, str) else None
+    if target is None:
+        return True
+    path = Path(_native_path(target))
+    if not path.is_absolute():
+        path = Path(resolve_cwd(payload)) / path
+    try:
+        return path.is_dir()
+    except OSError:
+        return False

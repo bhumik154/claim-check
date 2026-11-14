@@ -196,3 +196,12 @@ def test_one_long_line_of_counts_is_handled_quickly(text):
     extract_claims(text)
     conversation.extract_claims(text)
     assert time.perf_counter() - start < 2.0
+
+
+def test_a_quote_right_after_an_opening_bracket_opens():
+    # Found dogfooding 0.9.0's own commit message: ("`make check` passes")
+    # was not seen as quoted, because a quote after "(" also counted as
+    # able to close.
+    text = 'one ("`make check` and `make webcheck` pass"), and more'
+    assert quoted_texts(text) == ['"`make check` and `make webcheck` pass"']
+    assert quoted_texts('a ("22 passed") b') == ['"22 passed"']

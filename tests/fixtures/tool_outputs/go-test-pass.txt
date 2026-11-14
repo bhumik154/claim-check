@@ -1,0 +1,1 @@
+ok  	example.com/gopass	0.001s

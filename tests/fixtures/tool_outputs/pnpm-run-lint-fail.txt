@@ -1,0 +1,12 @@
+
+> js@1.0.0 lint /work/js
+> eslint src/bad.js
+
+
+/work/js/src/bad.js
+  1:7  error  'unused' is assigned a value but never used  no-unused-vars
+  2:1  error  'undefinedThing' is not defined              no-undef
+
+✖ 2 problems (2 errors, 0 warnings)
+
+ ELIFECYCLE  Command failed with exit code 1.

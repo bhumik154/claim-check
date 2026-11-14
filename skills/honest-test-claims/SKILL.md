@@ -63,6 +63,14 @@ check it. A count you want verified has to look like a statement.
 The reverse holds too: when you are explaining or quoting a claim rather than
 making one, put it in quotes so it is not read as yours.
 
+## Name the command you actually ran
+
+The same goes for a claim that a command passed: "`make check` passes",
+"`npm run lint` is clean". Name the command exactly as you ran it, in
+backticks, and only after reading how that run ended. A claim about
+`make check` is checked against your last `make check`, not against a
+different command that happens to cover the same ground.
+
 ## What this skill does not ask
 
 It does not ask you to run the test suite before finishing every task. If you

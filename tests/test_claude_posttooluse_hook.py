@@ -145,3 +145,51 @@ def test_a_run_after_cd_is_filed_under_the_directory_it_ran_in(project):
     _run(payload)
     assert evidence.load_fresh(project, "s1") is not None
     assert evidence.load_fresh(parent, "s1") is None
+
+
+def test_a_verification_run_that_succeeded_is_recorded_in_the_run_log(tmp_path, monkeypatch):
+    # A piped run: the call succeeded, but tsc's own error line is in it.
+    from claim_check import run_log
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    project = tmp_path / "proj"
+    project.mkdir()
+    payload = {
+        "session_id": "s1", "cwd": str(project), "tool_name": "Bash",
+        "tool_input": {"command": "npx tsc --noEmit 2>&1 | tail -40"},
+        "tool_response": {"stdout": "src/bad.ts(1,7): error TS2322: nope\n", "stderr": ""},
+    }
+    assert hook.main(stdin_text=json.dumps(payload)) == 0
+    assert "error TS2322" in run_log.contradiction("tsc --noEmit", project, "s1")
+
+
+# --- PowerShell: a rerun there supersedes, and is never blamed ----------------
+
+TSC_LINE = "src/bad.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n"
+
+
+def test_a_powershell_rerun_supersedes_an_earlier_bash_failure(project):
+    from claim_check import run_log
+    _run(_payload(project, command="npx tsc --noEmit 2>&1 | tail -40", stdout=TSC_LINE))
+    assert run_log.contradiction("tsc --noEmit", project, "s1") is not None
+    rerun = _payload(project, command="npx tsc --noEmit", stdout="")
+    rerun["tool_name"] = "PowerShell"
+    _run(rerun)
+    assert run_log.contradiction("tsc --noEmit", project, "s1") is None
+
+
+def test_a_powershell_run_is_never_blamed(project):
+    # Its syntax is not bash's: what a PowerShell line means is not parsed
+    # for blame, only recorded as the latest run.
+    from claim_check import run_log
+    call = _payload(project, command="npx tsc --noEmit 2>&1 | Select-Object -Last 40", stdout=TSC_LINE)
+    call["tool_name"] = "PowerShell"
+    _run(call)
+    assert run_log.contradiction("tsc --noEmit", project, "s1") is None
+
+
+def test_a_powershell_pytest_run_is_not_test_evidence(project):
+    call = _payload(project)
+    call["tool_name"] = "PowerShell"
+    _run(call)
+    assert evidence.load_fresh(project, "s1") is None

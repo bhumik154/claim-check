@@ -1,0 +1,5 @@
+--- FAIL: TestBad (0.00s)
+    pkg_test.go:7: expected 2, got 3
+FAIL
+FAIL	example.com/gofail/pkg	0.001s
+FAIL

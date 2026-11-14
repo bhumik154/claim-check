@@ -226,6 +226,41 @@ in a different session), or the most recent run in this session was narrowed
 and covered less than the whole suite. It still never blocks and never
 reports a claim as false on the strength of missing evidence.
 
+## Claims that a named command passed
+
+The end-of-turn check also reads claims like "`make check` passes",
+"`npm run lint` and `npm run typecheck` are both clean" or
+"`tsc`/`eslint`/`vitest` all clean". The command has to be in backticks.
+
+Each named command is looked up in this session's run log: every Bash call
+that ran a verification program (make, npm, pnpm, tsc, eslint, go, pytest
+and the like), whether it succeeded or failed. A claim is reported only when
+the most recent run of exactly that command, against files that have not
+changed since, provably failed:
+
+- its own failure line is in the output and nothing else in that call could
+  have printed it, or
+- the call failed and that command was all it ran, so the exit code is its own.
+
+Failures arrive through a fourth hook, `PostToolUseFailure`, because Claude
+Code never sends a failed Bash call to `PostToolUse`. As with any new hook,
+restart `claude` after updating so it loads.
+
+Anything short of proof is silent, including a command that was never run.
+A call that exited 0 proves the command passed when it ran alone, unpiped, or
+at the end of an `&&` chain, so nothing it printed is blamed on it.
+
+Only report-shaped sentences are read: the command opens its clause (after
+nothing, a bullet, "and", or a results label like "Checks:" or "Verified:"),
+only filler sits before the verdict, and nothing later in the sentence takes
+it back. "When `make check` passes ...", "Confirm `make check` passes",
+"Expected: `make check` passes" and "`tsc`: 4 errors, eslint clean" are not
+claims.
+
+PowerShell tool calls are recorded too, as the latest run of what they ran,
+so a passing rerun in PowerShell clears an earlier Bash failure. They are
+never blamed for a failure, because the blame rules read bash syntax.
+
 ## Configuration
 
 The hook reads no config file. To change its behaviour, edit the `command`
