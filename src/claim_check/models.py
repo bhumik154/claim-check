@@ -90,3 +90,16 @@ class Verdict:
     reason."""
     claims: list[Claim]
     counts: Optional[PytestCounts]
+
+
+@dataclass(frozen=True)
+class CommandClaim:
+    """A claim that one or more named commands passed: "`make check` passes",
+    "`npm run lint` and `npm run typecheck` are both clean"."""
+
+    commands: tuple
+    """Each command as written inside its code span, stripped."""
+    raw_text: str
+    """The claim as written, from the first code span through the verb."""
+    span: tuple[int, int]
+    """Character offsets (start, end) into the text it was read from."""

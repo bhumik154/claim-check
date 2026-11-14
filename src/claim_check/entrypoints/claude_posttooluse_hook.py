@@ -18,8 +18,9 @@ import sys
 from typing import Optional, Sequence
 
 from .._debug import dump_payload
-from .._payload import bash_command, effective_dir, session_id, tool_stdout
+from .._payload import bash_command, effective_dir, leading_cd_ok, session_id, tool_output, tool_stdout
 from ..evidence import record_run
+from ..run_log import record_call
 
 import json
 
@@ -45,18 +46,26 @@ def _run(stdin_text: Optional[str]) -> int:
     if command is None:
         return 0
 
+    where = effective_dir(payload, command)
     stdout = tool_stdout(payload)
-    if not stdout:
-        return 0
+    if stdout:
+        # record_run itself decides whether this was a test run: it returns
+        # None when the output holds no pytest summary line. Deciding from
+        # the output rather than by pattern-matching the command string means
+        # a wrapper ("make test", "poetry run pytest") is recognised on its
+        # merits. Filed under where the suite ran, not where the Bash tool
+        # was: a run after `cd /repo &&` belongs to /repo, and fingerprinting
+        # the parent folder instead would go stale on edits to any other
+        # project in it.
+        record_run(where, session_id(payload), command, stdout)
 
-    # record_run itself decides whether this was a test run: it returns None
-    # when the output holds no pytest summary line. Deciding from the output
-    # rather than by pattern-matching the command string means a wrapper
-    # ("make test", "poetry run pytest") is recognised on its merits.
-    # Filed under where the suite ran, not where the Bash tool was: a run
-    # after `cd /repo &&` belongs to /repo, and fingerprinting the parent
-    # folder instead would go stale on edits to any other project in it.
-    record_run(effective_dir(payload, command), session_id(payload), command, stdout)
+    # Every verification command, for claims that one passed. The call
+    # succeeded, but through `| tail` that says nothing about the tool, so
+    # what it printed is kept to judge by.
+    record_call(
+        where, session_id(payload), command, tool_output(payload) or "", "ok",
+        cd_ok=leading_cd_ok(payload, command),
+    )
     return 0
 
 

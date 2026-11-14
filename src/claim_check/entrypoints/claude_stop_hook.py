@@ -36,9 +36,11 @@ from typing import Optional, Sequence
 
 from .._debug import dump_payload
 from .._payload import resolve_cwd, session_id
+from ..command_claims import extract_command_claims
 from ..compare import compare_claims
 from ..conversation import extract_claims
 from ..evidence import counts_from_record, load_fresh_nearby
+from ..run_log import contradiction
 from ..session_stats import ratio_suffix
 from ..transcript import last_assistant_text
 
@@ -50,6 +52,14 @@ CORRECTION_INSTRUCTION = (
     "Correct the statement to match the observed result. "
     "Do not modify tests or source code to make the earlier statement true."
 )
+
+
+def _rendered(text: str, limit: int = 80) -> str:
+    """One line, length-capped. Claim text and tool output are untrusted and
+    go straight back to the model, so line breaks and length are closed off,
+    as compare.py does for count claims."""
+    collapsed = " ".join(str(text).split())
+    return collapsed if len(collapsed) <= limit else collapsed[: limit - 3] + "..."
 
 
 def _note(message: str) -> str:
@@ -103,15 +113,32 @@ def _run(stdin_text: Optional[str]) -> int:
     if not text:
         return 0
 
-    # Cheap prefilter before any parsing. Every claim shape contains "pass",
-    # so one case-insensitive scan drops the ~98% of turns that assert
-    # nothing about tests.
-    if "pass" not in text.lower():
+    # Cheap prefilter before any parsing. Every count claim contains "pass",
+    # and every command claim names its command in backticks, so one scan
+    # drops the turns that assert nothing either way.
+    if "pass" not in text.lower() and "`" not in text:
         return 0
+
+    count_text, count_is_finding = _count_report(text, payload)
+    command_texts = _command_findings(text, payload)
+
+    parts = [part for part in [count_text, *command_texts] if part]
+    if not parts:
+        return 0
+    if count_is_finding or command_texts:
+        parts.append(CORRECTION_INSTRUCTION)
+    print(_note(" ".join(parts)))
+    return 0
+
+
+def _count_report(text: str, payload: dict):
+    """(what to say about a test-count claim or None, whether it is a finding)."""
+    if "pass" not in text.lower():
+        return None, False
 
     claims = extract_claims(text)
     if not claims:
-        return 0
+        return None, False
 
     claim = claims[0]
     record = load_fresh_nearby(resolve_cwd(payload), session_id(payload))
@@ -120,29 +147,46 @@ def _run(stdin_text: Optional[str]) -> int:
         # No usable evidence. Reported, never as a finding of falsehood: the
         # claim may be perfectly true and simply unchecked. The cause leads,
         # because the cause is the part the reader can act on.
-        print(_note(
+        return (
             f'claim-check: could not verify "{claim.raw_text}". '
             f"{_cause_sentence(record)}{ratio_suffix(payload)}"
-        ))
-        return 0
+        ), False
 
     counts = counts_from_record(record)
     if counts is None or counts.errors:
         # An error means some test never ran, so the true denominator is
         # unknown. Blocking a commit on that is defensible; nagging about it
         # in conversation is not.
-        return 0
+        return None, False
 
     verdict = compare_claims([claim], counts)
     if verdict.status != "mismatch":
-        return 0
+        return None, False
 
-    print(_note(
+    return (
         f"claim-check: {verdict.message}, according to the last full test run "
-        f"in this session ({counts.raw_summary_line.strip()}). "
-        f"{CORRECTION_INSTRUCTION}"
-    ))
-    return 0
+        f"in this session ({counts.raw_summary_line.strip()})."
+    ), True
+
+
+def _command_findings(text: str, payload: dict) -> list:
+    """One sentence per named command claimed to pass whose most recent run
+    in this session provably failed. Silent otherwise, including when no run
+    was recorded: "could not verify" waits until this claim type's noise has
+    been measured."""
+    if "`" not in text:
+        return []
+    cwd, session = resolve_cwd(payload), session_id(payload)
+    findings = []
+    for claim in extract_command_claims(text):
+        for command in claim.commands:
+            proof = contradiction(command, cwd, session)
+            if proof is not None:
+                findings.append(
+                    f'claim-check: said "{_rendered(claim.raw_text)}", but the last run of '
+                    f"`{_rendered(command)}` in this session failed: {_rendered(proof, 160)}."
+                )
+    return findings
 
 
 def main(stdin_text: Optional[str] = None, argv: Optional[Sequence[str]] = None) -> int:

@@ -102,7 +102,7 @@ def quoted_block_regions(text: str) -> List[Region]:
     return regions
 
 
-def quoted_regions(text) -> List[Region]:
+def quoted_regions(text, code_spans: bool = True) -> List[Region]:
     """Sorted, non-overlapping (start, end) spans of quoted text, quote marks
     included.
 
@@ -114,13 +114,27 @@ def quoted_regions(text) -> List[Region]:
       quotation: the same character is the apostrophe in "'cause" and "'90s".
 
     Quote marks inside a code span are part of the code span.
+
+    `code_spans=False` leaves code spans themselves out of the result, while
+    still ignoring quote marks inside them. A claim that a command passed
+    names the command in a code span, "`make check` passes", and there the
+    span is the claim's subject, not a quotation.
     """
     if not isinstance(text, str) or not text:
         return []
     code = _code_spans(text)
     doubles = _double_quotes(text, code)
     singles = _single_quotes(text, merged(code + doubles))
+    if not code_spans:
+        return merged(doubles + singles)
     return merged(code + doubles + singles)
+
+
+def code_spans(text) -> List[Region]:
+    """The Markdown code spans in `text`, as (start, end) with backticks."""
+    if not isinstance(text, str) or not text:
+        return []
+    return _code_spans(text)
 
 
 def merged(regions: List[Region]) -> List[Region]:

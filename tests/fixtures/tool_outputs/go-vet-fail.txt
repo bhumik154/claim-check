@@ -1,0 +1,3 @@
+# example.com/gofail/pkg
+# [example.com/gofail/pkg]
+pkg/vet.go:5:12: fmt.Printf format %d has arg "x" of wrong type string

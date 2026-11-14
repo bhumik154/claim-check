@@ -58,3 +58,36 @@ def test_a_bare_git_bash_drive_means_the_drive_root(tmp_path):
     drive = os.path.splitdrive(str(tmp_path))[0]
     result = effective_dir(_payload(tmp_path), f"cd /{drive[0].lower()} && pytest")
     assert os.path.normcase(result) == os.path.normcase(drive + "\\")
+
+
+# --- what a Bash call printed, and how it ended ---------------------------------
+
+from claim_check._payload import leading_cd_ok, tool_failure, tool_output  # noqa: E402
+
+
+def test_tool_output_joins_stdout_and_stderr():
+    # make prints its "make: *** ... Error" line on stderr.
+    payload = {"tool_response": {"stdout": "go test ./...\n", "stderr": "make: *** [check] Error 1\n"}}
+    assert "make: ***" in tool_output(payload)
+    assert tool_output({"tool_response": {"stdout": "only\n", "stderr": ""}}) == "only\n"
+
+
+def test_a_failure_payload_gives_its_exit_code_and_output():
+    # The PostToolUseFailure payload of Claude Code 2.1.274.
+    payload = {"error": "Exit code 2\nsrc/bad.ts(1,7): error TS2322: nope\n", "is_interrupt": False}
+    assert tool_failure(payload) == (2, "src/bad.ts(1,7): error TS2322: nope\n")
+    assert tool_failure({"error": "Error: Exit code 1\nboom"}) == (1, "boom")
+
+
+def test_a_failure_without_an_exit_code_keeps_its_text():
+    assert tool_failure({"error": "Command timed out"}) == (None, "Command timed out")
+    assert tool_failure({"error": None}) is None
+    assert tool_failure({}) is None
+
+
+def test_a_leading_cd_is_ok_only_when_its_directory_exists(tmp_path):
+    payload = {"cwd": str(tmp_path)}
+    (tmp_path / "proj").mkdir()
+    assert leading_cd_ok(payload, "cd proj && make check") is True
+    assert leading_cd_ok(payload, "cd missing && make check") is False
+    assert leading_cd_ok(payload, "make check") is True

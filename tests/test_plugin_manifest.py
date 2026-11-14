@@ -113,3 +113,21 @@ def test_every_skill_declares_name_and_description_frontmatter(skill_file):
     frontmatter = text.split("---\n", 2)[1]
     assert re.search(r"^name:\s*\S+", frontmatter, re.MULTILINE), skill_file
     assert re.search(r"^description:\s*\S+", frontmatter, re.MULTILINE), skill_file
+
+
+def test_failed_bash_calls_are_recorded_by_a_failure_hook():
+    # Claude Code sends a failed Bash call to PostToolUseFailure, never to
+    # PostToolUse; without this entry claim-check never sees a failure.
+    hooks = json.loads(HOOKS_MANIFEST.read_text(encoding="utf-8"))["hooks"]
+    [entry] = hooks["PostToolUseFailure"]
+    assert entry["matcher"] == "Bash"
+    assert entry["hooks"][0]["command"].endswith("claude_posttoolusefailure_hook")
+
+
+def test_every_hook_names_an_entrypoint_module_that_exists():
+    hooks = json.loads(HOOKS_MANIFEST.read_text(encoding="utf-8"))["hooks"]
+    for entries in hooks.values():
+        for entry in entries:
+            for hook in entry["hooks"]:
+                module = hook["command"].rsplit(" ", 1)[-1]
+                assert (REPO_ROOT / "src" / "claim_check" / "entrypoints" / f"{module}.py").is_file(), module
