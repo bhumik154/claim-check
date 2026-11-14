@@ -97,3 +97,14 @@ def test_commands_joined_by_slashes_are_each_claimed():
 def test_a_tally_of_claims_is_not_a_claim():
     # From a summary that counted claims: "`tsc` clean x27, `make check` passes x6".
     assert commands("(`tsc` clean ×27, CI green ×32, `make check` passes ×6)") == []
+
+
+def test_ok_has_to_follow_the_command_directly():
+    # From 0.9.0's own commit message: "a call labelled `npx tsc` had printed
+    # TYPECHECK OK" is not a claim that tsc passed.
+    assert commands("a call labelled `npx tsc` had printed TYPECHECK OK (vitest failed)") == []
+    assert commands("Gate: `make check` OK, `make webcheck` OK.") == [("make check",), ("make webcheck",)]
+
+
+def test_a_quoted_claim_in_brackets_is_an_example():
+    assert commands('one ("`make check` and `make webcheck` pass"), and about') == []

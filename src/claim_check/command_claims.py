@@ -43,9 +43,12 @@ _JOINER = re.compile(r"\s*(?:,\s*(?:and\s+)?|and\s+|&\s*|/\s*)")
 _TALLY_AFTER = re.compile(r"\s*[×x]\s*\d")
 
 # After the subject: a short gap in the same sentence, then the verdict.
+# "OK" only straight after the command, "`make check` OK" or "`make check`:
+# OK": after other words it belongs to something else ("labelled `npx tsc`
+# had printed TYPECHECK OK").
 _VERDICT = re.compile(
-    r"(?P<gap>[^.\n`?!;]{0,30}?)"
-    r"(?:\b(?i:pass(?:es|ed)?|succeed(?:s|ed)?|clean|green)\b|\bOK\b)"
+    r"(?:(?P<gap>[^.\n`?!;]{0,30}?)\b(?i:pass(?:es|ed)?|succeed(?:s|ed)?|clean|green)\b"
+    r"|[ \t]*:?[ \t]*OK\b)"
 )
 
 # In the gap: the verdict is denied, reversed, or only expected
@@ -91,7 +94,7 @@ def extract_command_claims(text) -> List[CommandClaim]:
         if verdict is None:
             continue
         # A mixed subject, "`a`, `b` and the scrub pass", keeps its commands.
-        gap = verdict.group("gap")
+        gap = verdict.group("gap") or ""
         if _DENIED.search(gap):
             continue
         start, end = group[0][0], verdict.end()

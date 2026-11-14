@@ -271,7 +271,8 @@ def _double_quotes(text: str, code: List[Region]) -> List[Region]:
         before = text[position - 1] if position else " "
         after = text[position + 1] if position + 1 < len(text) else " "
         can_open = (before.isspace() or before in "([{") and not after.isspace()
-        can_close = not before.isspace() and not (after.isalnum() or after == "_")
+        # After an opening bracket a quote can only open: ("x") was missed.
+        can_close = not before.isspace() and before not in "([{" and not (after.isalnum() or after == "_")
         if can_open and not can_close:
             stack.append((position, '"'))
         elif top == '"':
