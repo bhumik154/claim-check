@@ -310,3 +310,30 @@ def test_an_idiom_of_an_imagined_case_is_not_a_claim(text):
 def test_a_sign_off_before_a_claim_still_reads():
     assert commands("Perfect, `tsc` is clean.") == [("tsc",)]
     assert commands("Great, `npm test` passes now.") == [("npm test",)]
+
+
+# --- round four, from the 0.9.1 smoke test --------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "On a good day, `npm test` passes.",
+    "On a clean checkout, `make check` passes.",
+    "Done right, `make check` passes.",
+    "Done properly, `npm test` passes.",
+    "In that case, `make check` passes.",
+    "Fine, `make check` passes in that scenario.",
+    "Works, `npm test` passes on my imaginary machine.",
+])
+def test_a_condition_dressed_as_a_sign_off_is_not_a_claim(text):
+    assert commands(text) == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("`make check` passes, including the offline scenario.", [("make check",)]),
+    ("`npm test` passes in every scenario we cover.", [("npm test",)]),
+    ("`tsc` is clean across the world map module.", [("tsc",)]),
+    ("Paper trail updated, `make check` passes.", [("make check",)]),
+    ("`make check` passes on the hello-world example too.", [("make check",)]),
+    ("Fixed the principle violation, `npm run lint` is clean.", [("npm run lint",)]),
+])
+def test_the_imagined_case_words_only_count_as_phrases(text, expected):
+    assert commands(text) == expected

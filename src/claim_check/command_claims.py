@@ -79,6 +79,24 @@ _GAP = re.compile(
     re.I,
 )
 
+# An imagined case, as a phrase: "In a perfect world, ...", "Works on paper",
+# "Good in principle", "Perfect scenario", "in that case". Single words cost
+# real claims ("including the offline scenario", "Paper trail updated").
+_IMAGINED = (
+    r"\b(?:(?:perfect|ideal|dream|better|best|worst|that|this|another|an?) (?:world|scenario|case)"
+    r"|in (?:a|an|that|this|my|our|your) (?:\w+ )?(?:world|scenario|case)"
+    r"|on paper|in principle|hypothetical\w*|imaginary|imagined|pretend)\b"
+)
+
+# A clause before the command that sets a condition, though it carries a
+# results word: "On a clean checkout, ...", "On a good day, ...", "Done
+# right, ...".
+_CONDITION_CLAUSE = re.compile(
+    r"^(?:on|in|at|with|under|for|by|from|without|during|given)\b"
+    r"|^(?:done|set up|configured|run|used|built) (?:right|properly|correctly|well)$",
+    re.I,
+)
+
 # Before the command, in the same sentence (code spans blanked out): the claim
 # is a condition, an intention, a goal, a memory or somebody else's words.
 _HYPOTHETICAL = re.compile(
@@ -89,9 +107,7 @@ _HYPOTHETICAL = re.compile(
     r"wrong|false|goals?|criteria|next|todo|plan|steps?|verify|confirm|"
     r"assuming|provided|ideal|theoretically|per|according|yesterday|last|reference|"
     r"base|baseline|revert\w*|stash\w*|probably|maybe|perhaps|likely|apparently|"
-    r"presumably|reportedly|allegedly|ci|"
-    # An imagined case: "In a perfect world, ...", "Works on paper, ...".
-    r"world|paper|principle|scenario|hypothetical\w*)\b",
+    r"presumably|reportedly|allegedly|ci)\b|" + _IMAGINED,
     re.I,
 )
 _TO_BEFORE = re.compile(r"\bto\s*$", re.I)
@@ -151,8 +167,7 @@ _TAKEN_BACK = re.compile(
     r"previously|earlier|used to|in theory|on main|on master|upstream|ci|stops?|red|only|"
     r"base|baseline|parent|old|stash\w*|revert\w*|said|says|according|supposedly|"
     r"apparently|reportedly|allegedly|presumably|probably|maybe|perhaps|likely|"
-    r"theoretically|should|if|world|paper|principle|scenario|hypothetical\w*)\b|"
-    + _FAILED,
+    r"theoretically|should|if)\b|" + _IMAGINED + "|" + _FAILED,
     re.I,
 )
 _FAILED_RE = re.compile(_FAILED, re.I)
@@ -246,7 +261,7 @@ def _opens_clause(blank: str, start: int) -> bool:
     earlier = _PARENTHETICAL.sub("", blank[_sentence_start(blank, start):clause_start])
     for piece in _CLAUSE_BREAK.split(earlier):
         piece = _MARKUP.sub("", piece).strip()
-        if piece and not _INTRO_OK.search(piece):
+        if piece and (not _INTRO_OK.search(piece) or _CONDITION_CLAUSE.search(piece)):
             return False
     if mark not in _DASHES:
         return True
