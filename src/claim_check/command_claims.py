@@ -13,6 +13,20 @@ passes", "once ... passes"), a negation, a question, a quoted example, and
 any code span that does not start with a program (`TestDecider`, `git
 status`, a file name). Missing a claim costs a check; inventing one costs the
 user's trust.
+
+The rules ask one question: is this sentence a report? The 0.9.0 smoke test
+showed why. An agent writes about a command most right after it failed:
+"When `make check` passes, the deploy runs", "Confirm `npm run typecheck`
+passes", "Expected: `make check` passes", "`tsc`: 4 errors, eslint clean".
+The first build read 39 of 46 such sentences as claims. So a claim must look
+like the reports in the real corpus (Matt's 98 PRs, the author's sessions):
+
+- the command opens its clause, after nothing, a bullet, "and", "both", or a
+  results label ("Checks:", "Verified:", "All clean -");
+- only filler sits between it and the verdict ("is", "are all", ":");
+- "passes" takes no object ("passes `-race` to go test");
+- nothing later in the sentence takes it back ("but fails on this branch",
+  "before the refactor", "then stops on three failures").
 """
 
 import re
@@ -46,27 +60,101 @@ _TALLY_AFTER = re.compile(r"\s*[×x]\s*\d")
 # "OK" only straight after the command, "`make check` OK" or "`make check`:
 # OK": after other words it belongs to something else ("labelled `npx tsc`
 # had printed TYPECHECK OK").
+# OK is tried first: in "`make check` OK, scrub clean" the verdict is the OK,
+# not the "clean" that belongs to the scrub.
 _VERDICT = re.compile(
-    r"(?:(?P<gap>[^.\n`?!;]{0,30}?)\b(?i:pass(?:es|ed)?|succeed(?:s|ed)?|clean|green)\b"
-    r"|[ \t]*:?[ \t]*OK\b)"
+    r"(?:[ \t]*:?[ \t]*OK\b"
+    r"|(?P<gap>[^.\n`?!;]{0,30}?)\b(?i:pass(?:es|ed)?|succeed(?:s|ed)?|clean|green)\b)"
 )
 
-# In the gap: the verdict is denied, reversed, or only expected
-# ("`make check` should pass").
-_DENIED = re.compile(
-    r"\b(?:not|never|no longer|fails?|failed|failing|broke|broken|without|"
-    r"should|will|would|must|could|might|may|can|to)\b|n't",
+# Between the command and the verdict: filler only. "`make check` is green",
+# "`tsc`/`eslint` are all clean", "`make app-test` (simulator): passed",
+# "`make check`, `make webcheck` and the scrub pass". Anything else, a
+# negation ("isn't"), a modal ("should") or other words ("`tsc`: 4 errors,
+# eslint clean"), means the verdict is not this command's.
+_GAP = re.compile(
+    r"\s*(?:\([^()\n]{0,40}\)\s*)?(?:and\s+(?:the\s+)?\w+\s+)?"
+    r"(?:(?:is|are|was|were|has|have|had|been|now|again|all|both|also|still|fully|each|just)\s+"
+    r"|[:—–-]\s*)*",
     re.I,
 )
 
-# Before the subject, in the same sentence: the claim is a condition, an
-# intention or an instruction, not a report.
+# Before the command, in the same sentence (code spans blanked out): the claim
+# is a condition, an intention, a goal, a memory or somebody else's words.
 _HYPOTHETICAL = re.compile(
     r"\b(?:should|will|would|must|until|unless|if|once|ensure|make sure|whether|so that|"
-    r"could|might|needs? to|expect|wait for|lets?|before|does|do|did|can)\b",
+    r"could|might|needs? to|expect\w*|wait for|lets?|before|does|do|did|can|"
+    r"earlier|previously|originally|formerly|used to|whenever|when|while|in theory|"
+    r"supposedly|ideally|hopefully|hoping|said|says|claim\w*|reported|neither|nor|none|"
+    r"wrong|false|goals?|criteria|next|todo|plan|steps?|verify|confirm|"
+    r"assuming|provided|ideal|theoretically|per|according|yesterday|last|reference|"
+    r"base|baseline|revert\w*|stash\w*|probably|maybe|perhaps|likely|apparently|"
+    r"presumably|reportedly|allegedly|ci)\b",
     re.I,
 )
 _TO_BEFORE = re.compile(r"\bto\s*$", re.I)
+
+# Every clause of the sentence before the command's own has to be part of a
+# report too: another command ("`tsc` clean, `eslint` clean") or a results
+# word ("TDD'd, ...", "Fixed, ..."). An introduction of any other kind
+# places the claim somewhere else: "Assuming the fix works, ...", "Per the
+# README, ...", "Last week, ...". There are too many of those to list.
+_INTRO_OK = re.compile(
+    r"#|\b(?:verified|verification|checks?|gate|clean|done|passed|passing|pass|ran|re-ran|"
+    r"results?|status|confirmed|validated|ok|fixed|implemented|added|updated|landed|merged|"
+    r"green|tdd'd|good|great|perfect|nice|works|working|fine|all set)\b",
+    re.I,
+)
+_PARENTHETICAL = re.compile(r"\([^()\n]*\)")
+
+# The next sentence takes the claim back: "`npm test` passes. Actually, it
+# fails on the last package."
+# Same paragraph only: "Not committed yet" in the next one is about something
+# else.
+_RETRACTED = re.compile(
+    r"[ \t]*(?:(?:actually|wait|correction|except|but|however|though|well|not really|oops|"
+    r"scratch that)\b|no\s*[,:]|[^.!?\n]{0,40}\b(?:it|that|this)\b[^.!?\n]{0,30}"
+    r"(?:\bfail\w*|\bdoesn't|\bdoes not|\bdidn't|\bdid not|\bisn't|\bwasn't|\bbroke\b))",
+    re.I,
+)
+
+# Where a clause starts. The command must open it.
+_CLAUSE_BREAK = re.compile(r"[.!?\n;,:(—–]")
+_DASHES = (":", "—", "–")
+_MARKUP = re.compile(r"^(?:\s*(?:[-*+•]|\d+[.)])(?=\s))?[\s*_✅✓✔]*|[\s*_]*$")
+_OPENERS = frozenset({"", "and", "both", "also", "now", "and now", "and also", "confirmed", "verified"})
+# A label ending in ":" or a dash has to announce results ("Checks:", "All
+# clean -"), not a goal ("Expected:") or a step ("Verify:").
+_RESULTS_LABEL = re.compile(
+    r"\b(?:verified|verification|checks?|gate|clean|done|passed|passing|pass|ran|re-ran|"
+    r"results?|status|confirmed|validated|ok)\b",
+    re.I,
+)
+
+# Right after the verdict: punctuation, the end, or a word that qualifies a
+# report ("passes locally", "clean on every changed file"). Anything else is
+# an object: "passes `-race` to go test", "passes formatting and vet".
+_NEXT_WORD = re.compile(r"[ \t]*(?P<word>[^\s.,;:()!?*_—–]*)")
+_QUALIFIERS = frozenset({
+    "", "on", "in", "locally", "now", "again", "with", "for", "including", "after", "at",
+    "across", "against", "cleanly", "fine", "too", "here", "everywhere", "wherever", "outside",
+    "under", "and", "repo-wide",
+})
+
+# Later in the same sentence: the report is taken back, placed in the past or
+# somewhere else, or the run failed after all. "zero errors" is a report.
+_FAILED = r"\bfail\w*|\bbroke\b|\bbroken\b|(?<!\bzero )(?<!\bno )(?<!\b0 )\berrors?\b"
+_TAKEN_BACK = re.compile(
+    r"\b(?:but|though|although|however|yet|except|whereas|despite|unless|until|before|"
+    r"previously|earlier|used to|in theory|on main|on master|upstream|ci|stops?|red|only|"
+    r"base|baseline|parent|old|stash\w*|revert\w*|said|says|according|supposedly|"
+    r"apparently|reportedly|allegedly|presumably|probably|maybe|perhaps|likely|"
+    r"theoretically|should|if)\b|"
+    + _FAILED,
+    re.I,
+)
+_FAILED_RE = re.compile(_FAILED, re.I)
+_CLAUSE_OR_SPAN = re.compile(r"[.!?\n;,:(—–#]")
 
 _SENTENCE_END = re.compile(r"[.!?\n]")
 
@@ -79,6 +167,9 @@ def extract_command_claims(text) -> List[CommandClaim]:
     if not spans:
         return []
     quoted = merged(quoted_regions(text, code_spans=False) + quoted_block_regions(text))
+
+    blank = _blanked(text, spans)
+    failed_here = _said_to_fail(text, blank, spans)
 
     claims = []
     i = 0
@@ -95,21 +186,96 @@ def extract_command_claims(text) -> List[CommandClaim]:
             continue
         # A mixed subject, "`a`, `b` and the scrub pass", keeps its commands.
         gap = verdict.group("gap") or ""
-        if _DENIED.search(gap):
+        if "|" in gap or not _GAP.fullmatch(gap):
             continue
         start, end = group[0][0], verdict.end()
         if _TALLY_AFTER.match(text, end):
             continue
-        if _is_question(text, end) or _is_hypothetical(text, start):
+        if _is_question(blank, end) or _is_hypothetical(blank, start):
+            continue
+        if not _opens_clause(blank, start) or _in_table(text, start):
+            continue
+        if _NEXT_WORD.match(text, end).group("word").lower() not in _QUALIFIERS:
+            continue
+        stop = _sentence_end(blank, end)
+        if _TAKEN_BACK.search(blank, end, stop):
+            continue
+        if blank[stop:stop + 1] in (".", "!") and _RETRACTED.match(blank, stop + 1):
             continue
         if any(a < end and start < b for a, b in quoted):
             continue
         commands = tuple(
-            body for body in (text[a:b].strip("`").strip() for a, b in group) if _is_command(body)
+            body for body in (text[a:b].strip("`").strip() for a, b in group)
+            if _is_command(body) and " ".join(body.split()) not in failed_here
         )
         if commands:
             claims.append(CommandClaim(commands=commands, raw_text=text[start:end], span=(start, end)))
     return claims
+
+
+def _blanked(text: str, spans) -> str:
+    """`text` with each code span replaced by "#", length kept, so the words
+    and punctuation inside commands ("./...", "a, b") are not read as prose."""
+    parts, last = [], 0
+    for a, b in spans:
+        parts.append(text[last:a])
+        parts.append("#" * (b - a))
+        last = b
+    parts.append(text[last:])
+    return "".join(parts)
+
+
+def _opens_clause(blank: str, start: int) -> bool:
+    """Whether the command starts its clause, as a report's subject does,
+    and any label it follows announces results."""
+    window = max(0, start - 200)
+    last = None
+    for last in _CLAUSE_BREAK.finditer(blank, window, start):
+        pass
+    if last is None:
+        if window:
+            return False
+        clause_start, mark = 0, ""
+    else:
+        clause_start, mark = last.end(), last.group()
+    lead = _MARKUP.sub("", blank[clause_start:start])
+    if " ".join(lead.lower().split()) not in _OPENERS:
+        return False
+    earlier = _PARENTHETICAL.sub("", blank[_sentence_start(blank, start):clause_start])
+    for piece in _CLAUSE_BREAK.split(earlier):
+        piece = _MARKUP.sub("", piece).strip()
+        if piece and not _INTRO_OK.search(piece):
+            return False
+    if mark not in _DASHES:
+        return True
+    label_start = 0
+    for found in _CLAUSE_BREAK.finditer(blank, max(0, clause_start - 200), clause_start - 1):
+        if found.group() not in _DASHES:
+            label_start = found.end()
+    return bool(_RESULTS_LABEL.search(blank, label_start, clause_start - 1))
+
+
+def _in_table(text: str, start: int) -> bool:
+    line_start = text.rfind("\n", 0, start) + 1
+    return text[line_start:start].lstrip().startswith("|")
+
+
+def _sentence_end(blank: str, position: int) -> int:
+    found = _SENTENCE_END.search(blank, position)
+    return found.start() if found else len(blank)
+
+
+def _said_to_fail(text: str, blank: str, spans) -> set:
+    """Commands the same message says failed, as in "`tsc` clean, but `tsc`
+    fails in CI". No claim about one of them is a clean report."""
+    failed = set()
+    for a, b in spans:
+        # Only this command's own clause: in "`tsc` clean, `vitest` 2 failed"
+        # the failure is vitest's.
+        found = _CLAUSE_OR_SPAN.search(blank, b)
+        if _FAILED_RE.search(blank, b, found.start() if found else len(blank)):
+            failed.add(" ".join(text[a:b].strip("`").split()))
+    return failed
 
 
 def _is_command(body: str) -> bool:

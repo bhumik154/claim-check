@@ -1,0 +1,20 @@
+=== RUN   TestGood
+--- PASS: TestGood (0.00s)
+=== RUN   TestFlaky
+    pkg_test.go:13: flaky: failed the first time
+--- FAIL: TestFlaky (0.00s)
+FAIL
+FAIL	example.com/flaky/pkg	0.002s
+
+DONE 2 tests, 1 failure in 0.101s
+
+=== RUN   TestFlaky
+--- PASS: TestFlaky (0.00s)
+PASS
+ok  	example.com/flaky/pkg	0.001s
+
+=== [31mFailed[0m
+=== [31mFAIL[0m: pkg TestFlaky (0.00s)
+    pkg_test.go:13: flaky: failed the first time
+
+DONE 2 runs, 3 tests, 1 failure in 0.206s

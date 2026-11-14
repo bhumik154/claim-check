@@ -11,7 +11,7 @@ Shared by all three hook entry points so the guards cannot drift apart.
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from .shell_parser import leading_cd_target
 
@@ -87,6 +87,23 @@ def bash_command(payload: dict) -> Optional[str]:
         return None
     command = tool_input.get("command")
     return command if isinstance(command, str) else None
+
+
+def shell_command(payload: dict) -> Optional[Tuple[str, str]]:
+    """(command, tool name) of a Bash or PowerShell tool call, or None.
+
+    PowerShell calls are read only to record that a command ran: on Windows
+    an agent reruns in PowerShell what failed in Bash, and without the rerun
+    the old failure still reads as the last run.
+    """
+    tool = payload.get("tool_name")
+    if tool not in ("Bash", "PowerShell"):
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
+    return (command, tool) if isinstance(command, str) else None
 
 
 def tool_stdout(payload: dict) -> Optional[str]:

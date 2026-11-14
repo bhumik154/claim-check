@@ -1,0 +1,27 @@
+/work/bin/gotestsum --rerun-fails --packages ./...
+[31m✖[0m  pkg (2ms)
+
+DONE 3 tests, 2 failures in 0.106s
+
+[31m✖[0m  pkg (1ms)
+[32m✓[0m  pkg (2ms)
+
+DONE 2 runs, 5 tests, 3 failures in 0.306s
+
+[31m✖[0m  pkg (2ms)
+
+=== [31mFailed[0m
+=== [31mFAIL[0m: pkg TestAlways (0.00s)
+    always_test.go:5: always
+
+=== [31mFAIL[0m: pkg TestFlaky (0.00s)
+    pkg_test.go:13: flaky: failed the first time
+
+=== [31mFAIL[0m: pkg TestAlways (re-run 1) (0.00s)
+    always_test.go:5: always
+
+=== [31mFAIL[0m: pkg TestAlways (re-run 2) (0.00s)
+    always_test.go:5: always
+
+DONE 3 runs, 6 tests, 4 failures in 0.407s
+make: *** [Makefile:2: test] Error 1

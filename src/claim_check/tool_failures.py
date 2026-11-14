@@ -40,6 +40,31 @@ PRINTERS = {
 }
 
 
+_GO_PACKAGE = re.compile(r"^(?:FAIL\t(?P<failed>\S+).*|ok\s+(?P<passed>\S+).*|FAIL)$", re.MULTILINE)
+
+
+def _a_go_package_failed(text: str) -> bool:
+    """Whether go test's own package lines say a package ended failed.
+
+    A failing package always ends with "FAIL\\t<package>" (or a bare "FAIL").
+    Without one, "--- FAIL:" is some other program's text. And a later
+    "ok  \\t<package>" means a rerun passed it: gotestsum --rerun-fails
+    prints both, then exits 0.
+    """
+    failed = {}
+    bare_fail = False
+    for match in _GO_PACKAGE.finditer(text):
+        if match.group("failed"):
+            failed[match.group("failed")] = True
+        elif match.group("passed"):
+            failed[match.group("passed")] = False
+        else:
+            bare_fail = True
+    if failed:
+        return any(failed.values())
+    return bare_fail
+
+
 def failure_lines(output, command: str = "") -> List[Tuple[str, str]]:
     """(family, line) for every line in `output` that proves a failure.
 
@@ -65,6 +90,8 @@ def locate_failures(output, command: str = "") -> List[Tuple[str, str, int]]:
                 # script mentioning "error TS1005:" once read as tsc failing.
                 continue
             found.append((family, match.group(0).strip(), match.start()))
+    if not _a_go_package_failed(text):
+        found = [item for item in found if item[0] != "go test"]
     counts = parse_run_output(text, command or "")
     if counts is not None and (counts.failed or counts.errors):
         line = counts.raw_summary_line.strip()

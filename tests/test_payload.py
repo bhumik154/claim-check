@@ -91,3 +91,17 @@ def test_a_leading_cd_is_ok_only_when_its_directory_exists(tmp_path):
     assert leading_cd_ok(payload, "cd proj && make check") is True
     assert leading_cd_ok(payload, "cd missing && make check") is False
     assert leading_cd_ok(payload, "make check") is True
+
+
+@pytest.mark.parametrize("tool, expected", [
+    ("Bash", ("npm test", "Bash")), ("PowerShell", ("npm test", "PowerShell")), ("Write", None),
+])
+def test_shell_command_reads_bash_and_powershell_calls(tool, expected):
+    from claim_check._payload import shell_command
+    assert shell_command({"tool_name": tool, "tool_input": {"command": "npm test"}}) == expected
+
+
+def test_shell_command_needs_a_string_command():
+    from claim_check._payload import shell_command
+    assert shell_command({"tool_name": "PowerShell", "tool_input": {"command": 3}}) is None
+    assert shell_command({"tool_name": "PowerShell", "tool_input": None}) is None

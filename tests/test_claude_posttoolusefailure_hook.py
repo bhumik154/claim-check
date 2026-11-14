@@ -72,3 +72,12 @@ def test_malformed_payloads_never_raise_and_never_emit(bad):
     with contextlib.redirect_stdout(out):
         assert hook.main(stdin_text=bad) == 0
     assert out.getvalue() == ""
+
+
+def test_a_failed_powershell_run_is_recorded_but_never_blamed(project):
+    error = "Exit code 2\n" + (OUTPUTS / "make-check-fail.txt").read_text(encoding="utf-8")
+    call = payload(project, "make check", error)
+    call["tool_name"] = "PowerShell"
+    assert run(call) == (0, "")
+    assert run_log.contradiction("make check", project, "s1") is None
+    assert list(run_log.run_dir(project, "s1").glob("*.json"))

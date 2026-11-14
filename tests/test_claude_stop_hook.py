@@ -477,3 +477,23 @@ def test_a_command_finding_and_a_count_finding_are_one_message(project, tmp_path
     message = _message_of(out)
     assert "22 passed" in message and "make check" in message
     assert message.count(hook.CORRECTION_INSTRUCTION) == 1
+
+
+def test_a_proof_ending_in_a_full_stop_is_not_doubled(project, tmp_path):
+    line = "src/bad.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n"
+    run_log.record_call(project, "s1", "npx tsc --noEmit 2>&1 | tail -40", line, "ok")
+    _, out = _run(project, tmp_path, "Done. `tsc` clean.", record=False)
+    message = _message_of(out)
+    assert "'number'. " in message and "'number'.." not in message
+
+
+def test_what_an_agent_writes_after_a_failure_is_silent(project, tmp_path):
+    # From the 0.9.0 smoke test: each of these became a false finding.
+    _failed_make_check(project)
+    for text in ["When `make check` passes, the deploy job runs.",
+                 "Next steps:\n1. Fix the test.\n2. Confirm `make check` passes.",
+                 "Expected: `make check` passes.",
+                 "`make check` passes `-race` to `go test`.",
+                 "Claude claimed `make check` passed. It hadn't."]:
+        _, out = _run(project, tmp_path, text, record=False)
+        assert out == "", text

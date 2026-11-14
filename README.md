@@ -161,7 +161,7 @@ claim-check-precommit COMMIT_EDITMSG --timeout 30
 
 ## What it's tested against
 
-[`tests/`](tests/) has 763 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
+[`tests/`](tests/) has 903 cases covering the claim parser, the pytest and JavaScript output parsers, the shell-command parser, the comparison policy, the subprocess runner, the evidence store, all five entry points, and the plugin manifest.
 
 This file is tested too. `scripts/readme_facts.py` pins the case count above, the version strings in the install instructions, and the supported-runner list, and it checks that the example messages below still regenerate from real code. Run `python scripts/readme_facts.py --fix` when a change makes one of them stale. It covers mechanical facts only: prose that quietly starts contradicting the code is still on a reviewer to catch.
 
@@ -240,7 +240,9 @@ The cases worth knowing about:
 
 **It isn't NLP.** It can't resolve tense or discourse. "Was at 15 passed, now 22/22" is genuinely ambiguous to a regex. Only one claim per message gets checked: the most specific kind, then the last one among ties. That covers a stale count corrected later, but a later sentence describing an earlier state can still slip through.
 
-**Command claims are checked only for failure, and only at the end of a turn.** "`make check` passes" is reported when the session's most recent run of exactly `make check`, against files that have not changed since, provably failed. Everything else is silent, including a command that was never run: unlike a test count, there is no "could not verify" note for these yet, until its noise is measured. A failure is provable only through the tool's own failure line, or the exit code when the command ran alone and unpiped, so `go vet` through `| tail`\| tail` and an unrecognised tool through a pipe tell nothing. Commit messages and PR descriptions are not checked for these claims yet, and neither are tool names without backticks ("the build passes").
+**Command claims are checked only for failure, and only at the end of a turn.** "`make check` passes" is reported when the session's most recent run of exactly `make check`, against files that have not changed since, provably failed. Everything else is silent, including a command that was never run: unlike a test count, there is no "could not verify" note for these yet, until its noise is measured. A failure is provable only through the tool's own failure line, or the exit code when the command ran alone and unpiped, so `go vet` through `| tail` and an unrecognised tool through a pipe tell nothing. A run that exited 0 is never blamed, whatever it printed. Commit messages and PR descriptions are not checked for these claims yet, and neither are tool names without backticks ("the build passes").
+
+**Only sentences shaped like a report count as a command claim.** The command has to open its clause, after nothing, a bullet, "and" or a results label like "Checks:", with only filler words before "passes", "clean" or "OK", and nothing later in the sentence taking it back. So "When `make check` passes, deploy", "Confirm `make check` passes", "Expected: `make check` passes", "`tsc`: 4 errors, eslint clean" and "`make check` passed on main but fails here" are not claims. These are what an agent writes right after a run fails, which is exactly when a finding could fire. The cost is that some real claims go unread, like "so `make check` passes" or "`make check` passes, but lint warns". Runs made through PowerShell count as the latest run of their command, so a passing rerun there clears an earlier failure, but they are never blamed for one.
 
 **pytest, vitest and jest only.** `cargo test`, `go test` and the rest are a real gap, documented rather than silently unsupported.
 

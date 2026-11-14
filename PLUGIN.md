@@ -247,6 +247,19 @@ Code never sends a failed Bash call to `PostToolUse`. As with any new hook,
 restart `claude` after updating so it loads.
 
 Anything short of proof is silent, including a command that was never run.
+A call that exited 0 proves the command passed when it ran alone, unpiped, or
+at the end of an `&&` chain, so nothing it printed is blamed on it.
+
+Only report-shaped sentences are read: the command opens its clause (after
+nothing, a bullet, "and", or a results label like "Checks:" or "Verified:"),
+only filler sits before the verdict, and nothing later in the sentence takes
+it back. "When `make check` passes ...", "Confirm `make check` passes",
+"Expected: `make check` passes" and "`tsc`: 4 errors, eslint clean" are not
+claims.
+
+PowerShell tool calls are recorded too, as the latest run of what they ran,
+so a passing rerun in PowerShell clears an earlier Bash failure. They are
+never blamed for a failure, because the blame rules read bash syntax.
 
 ## Configuration
 

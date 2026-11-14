@@ -18,7 +18,7 @@ import sys
 from typing import Optional, Sequence
 
 from .._debug import dump_payload
-from .._payload import bash_command, effective_dir, leading_cd_ok, session_id, tool_output, tool_stdout
+from .._payload import effective_dir, leading_cd_ok, session_id, shell_command, tool_output, tool_stdout
 from ..evidence import record_run
 from ..run_log import record_call
 
@@ -42,8 +42,18 @@ def _run(stdin_text: Optional[str]) -> int:
     if not isinstance(payload, dict):
         return 0
 
-    command = bash_command(payload)
-    if command is None:
+    call = shell_command(payload)
+    if call is None:
+        return 0
+    command, tool = call
+    if tool != "Bash":
+        # A PowerShell call counts as the latest run of what it ran, so a
+        # rerun there that passed supersedes a Bash failure. Nothing more:
+        # neither test evidence nor blame is read from PowerShell syntax.
+        record_call(
+            effective_dir(payload, command), session_id(payload), command, "", "ok",
+            cd_ok=leading_cd_ok(payload, command), blame=False,
+        )
         return 0
 
     where = effective_dir(payload, command)

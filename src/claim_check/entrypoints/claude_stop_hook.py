@@ -184,7 +184,7 @@ def _command_findings(text: str, payload: dict) -> list:
             if proof is not None:
                 findings.append(
                     f'claim-check: said "{_rendered(claim.raw_text)}", but the last run of '
-                    f"`{_rendered(command)}` in this session failed: {_rendered(proof, 160)}."
+                    f"`{_rendered(command)}` in this session failed: {_rendered(proof, 160).rstrip('.')}."
                 )
     return findings
 

@@ -41,6 +41,8 @@ from .evidence import (
     project_root,
 )
 from .shell_parser import leading_cd_target, shell_tokens
+from .evidence import parse_run_output
+from .pytest_parser import strip_ansi
 from .tool_failures import PRINTERS, locate_failures
 
 KEEP = 40
@@ -68,6 +70,7 @@ _ECHOERS = frozenset({"echo", "printf", "write-output", "write-host"})
 _DROPPED_PREFIXES = frozenset({"npx", "bunx", "time", "env"})
 _RUN_PREFIXES = {("pnpm", "exec"), ("pnpm", "dlx"), ("yarn", "dlx"), ("uv", "run"),
                  ("poetry", "run"), ("hatch", "run"), ("pdm", "run"), ("pipenv", "run")}
+_SEPARATORS = frozenset({";", "&&", "||", "&"})
 _PYTHONS = frozenset({"python", "python3", "py"})
 # npm and pnpm announce each script they run: "> name@1.0.0 lint".
 _SCRIPT_HEADER = re.compile(r"^> \S+@\S+ (?P<script>\S+)", re.MULTILINE)
@@ -105,21 +108,24 @@ def normalized(tokens) -> tuple:
 
 
 def record_call(project_dir, session_id, command, output, outcome, exit_code=None,
-                cd_ok: Optional[bool] = None) -> Optional[dict]:
+                cd_ok: Optional[bool] = None, blame: bool = True) -> Optional[dict]:
     """Records one Bash call if it ran a verification command.
 
     `outcome` is "ok", "failed" or "interrupted". `cd_ok` says whether a
     leading `cd` reached its directory; None works it out for an absolute
-    path and otherwise assumes it did not. Returns the stored record, or None
-    when nothing in the call verifies anything. Never raises.
+    path and otherwise assumes it did not. With `blame` False the call is
+    recorded as the latest run of its commands and blamed for nothing: that
+    is how a PowerShell call is kept, since its syntax is not bash's. Returns
+    the stored record, or None when nothing in the call verifies anything.
+    Never raises.
     """
     try:
-        return _record(project_dir, session_id, command, output, outcome, exit_code, cd_ok)
+        return _record(project_dir, session_id, command, output, outcome, exit_code, cd_ok, blame)
     except Exception:  # noqa: BLE001 - recording must never disturb the call
         return None
 
 
-def _record(project_dir, session_id, command, output, outcome, exit_code, cd_ok):
+def _record(project_dir, session_id, command, output, outcome, exit_code, cd_ok, blame):
     if not isinstance(command, str):
         return None
     stages = _stages(command)
@@ -127,11 +133,16 @@ def _record(project_dir, session_id, command, output, outcome, exit_code, cd_ok)
         return None
 
     failures = {}
-    if outcome != "interrupted":
+    if blame and outcome != "interrupted":
         failures = _blame(stages, output if isinstance(output, str) else "", command)
         sole = _sole_stage(stages, command, cd_ok)
         if outcome == "failed" and isinstance(exit_code, int) and sole is not None:
             failures.setdefault(sole, [f"exit code {exit_code}"])
+        if outcome == "ok":
+            # Whatever these printed, they exited 0. A test that logs a
+            # compiler diagnostic once made a passing `npm test` look failed.
+            for index in _proven_ok(command):
+                failures.pop(index, None)
 
     record = {
         "recorded_at": time.time(),
@@ -166,10 +177,11 @@ def _could_print(stage, family: str, line: str) -> bool:
     if program in _QUIET:
         return False
     if program in _ECHOERS:
-        # `echo TYPECHECK OK` prints only its own words. With an expansion
-        # in them it could print anything.
+        # `echo TYPECHECK OK` prints only its own words. With an expansion,
+        # a printf format or an escape in them ("error TS%d", "\x65rror")
+        # it could print anything.
         said = " ".join(args)
-        return "$" in said or "`" in said or line.strip() in said
+        return any(mark in said for mark in "$`%\\") or line.strip() in said
     if program in _RELAYS:
         reads_a_file = any(not a.startswith("-") and not a.isdigit() for a in args
                            if program not in ("grep", "egrep", "fgrep", "rg", "sed", "awk") or a != args[0])
@@ -189,6 +201,7 @@ def _blame(stages, output: str, command: str) -> dict:
     one that printed them."""
     blamed = {}
     headers = [(m.start(), m.group("script")) for m in _SCRIPT_HEADER.finditer(output)]
+    kept_going_to = _passing_summary_at(output, command)
     for family, line, offset in locate_failures(output, command):
         candidates = [i for i, s in enumerate(stages) if _could_print(s, family, line)]
         target = None
@@ -206,6 +219,10 @@ def _blame(stages, output: str, command: str) -> dict:
                 owners = [i for i in candidates if stages[i]["normal"][1:2] == (above[-1],)]
                 if len(owners) == 1:
                     target = owners[0]
+        if target is not None and offset < kept_going_to and _is_wrapper(stages[target], family):
+            # A wrapper that went on to a passing test summary did not stop
+            # at this line: a test logged it, or the script ignored it.
+            target = None
         if target is not None:
             blamed.setdefault(target, []).append(line[:_LINE_CAP])
     # The command's own family first: "make: *** ..." before the go lines under it.
@@ -214,6 +231,23 @@ def _blame(stages, output: str, command: str) -> dict:
         own = [l for l in lines if program in ("make", "gmake") and l.startswith(("make", "gmake"))]
         blamed[index] = (own + [l for l in lines if l not in own])[:5]
     return blamed
+
+
+def _passing_summary_at(output: str, command: str) -> int:
+    """Where a test runner's summary reporting every test passed sits in the
+    output (ANSI stripped, as failure offsets are), or -1."""
+    text = strip_ansi(output)
+    counts = parse_run_output(text, command or "")
+    if counts is None or counts.failed or counts.errors or not counts.passed:
+        return -1
+    return text.rfind(counts.raw_summary_line.strip())
+
+
+def _is_wrapper(stage, family: str) -> bool:
+    """A command that runs other tools: make, a package manager, a script.
+    Not the tool that prints this family's line itself."""
+    program = stage["normal"][0]
+    return _SPECIFIC.get(program) != family and program not in PRINTERS.get(family, ())
 
 
 def _sole_stage(stages, command: str, cd_ok: Optional[bool]) -> Optional[int]:
@@ -230,6 +264,55 @@ def _sole_stage(stages, command: str, cd_ok: Optional[bool]) -> Optional[int]:
     if len(pipelines) != 1 or len(pipelines[0]) != 1:
         return None
     return len(stages) - 1
+
+
+def _proven_ok(command: str) -> set:
+    """Stage indexes, as `_stages` numbers them, that a call's exit 0 proves
+    exited 0 too.
+
+    The call's status is its last pipeline's, and that pipeline's is its last
+    stage's (Claude Code's shell has no pipefail). So exit 0 proves the last
+    pipeline when it is one command, and every one-command pipeline joined to
+    it by an unbroken `&&` chain, since each of those had to succeed for the
+    chain to get there. `;`, `||` and `&` break the chain; anything in
+    brackets proves nothing.
+    """
+    links = []  # [stage count, separator after]
+    stage_open = False
+    stages = 0
+    for token in shell_tokens(command):
+        if token in ("(", ")"):
+            return set()
+        if token in _SEPARATORS:
+            stages += stage_open
+            if stages:
+                links.append([stages, token])
+            stages, stage_open = 0, False
+        elif token in ("|", "|&"):
+            stages += stage_open
+            stage_open = False
+        else:
+            stage_open = True
+    stages += stage_open
+    if stages:
+        links.append([stages, None])
+    if not links or links[-1][1] == "&":
+        return set()
+
+    first = []
+    total = 0
+    for count, _separator in links:
+        first.append(total)
+        total += count
+    proven = set()
+    index = len(links) - 1
+    while index >= 0:
+        if links[index][0] == 1:
+            proven.add(first[index])
+        if index == 0 or links[index - 1][1] != "&&":
+            break
+        index -= 1
+    return proven
 
 
 def _prune(folder: Path) -> None:

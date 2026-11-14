@@ -176,3 +176,45 @@ def test_npm_sections_are_not_trusted_when_a_header_was_cut_off(project):
     record(project, "npm run build 2>&1 | tail -30 && npm run lint 2>&1 | tail -20", output)
     assert contradiction(project, "npm run build") is None
     assert contradiction(project, "npm run lint") is None
+
+
+# --- 0.9.0 smoke test: a passing run is never blamed --------------------------
+
+TSC_LINE = "src/bad.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n"
+
+
+@pytest.mark.parametrize("command", ["npm test", "cd /x && npm test", "npm run lint && npm test"])
+def test_exit_0_proves_a_command_that_ran_alone_or_in_an_and_chain_passed(project, command):
+    # A test logged a compiler diagnostic; the run itself exited 0.
+    record(project, command, "> app@1.0.0 test\n" + TSC_LINE, "ok")
+    assert contradiction(project, "npm test") is None
+
+
+@pytest.mark.parametrize("command", ["npm test; true", "npm test || true", "npm test | tail -5",
+                                     "npm test & wait"])
+def test_exit_0_proves_nothing_when_the_command_was_not_last_in_an_and_chain(project, command):
+    record(project, command, "> app@1.0.0 test\n" + TSC_LINE, "ok")
+    assert contradiction(project, "npm test") is not None
+
+
+@pytest.mark.parametrize("printer", [r"printf 'src/a.ts(1,1): error TS%d: x\n' 2322",
+                                     r"printf '\x65rror TS2322: x\n'",
+                                     r"echo -e '\x65rror TS2322: x'"])
+def test_printf_and_echo_with_escapes_can_print_anything(project, printer):
+    record(project, f"npm run typecheck; {printer}", "src/a.ts(1,1): error TS2322: x\n", "ok")
+    assert contradiction(project, "npm run typecheck") is None
+
+
+def test_a_wrapper_that_kept_going_to_a_passing_test_summary_is_not_blamed(project):
+    # Piped, so exit 0 proves nothing. The diagnostic came from a test's log,
+    # and the run went on to report every test passing.
+    output = ("> app@1.0.0 test\n> vitest run\n\nstdout | compiler.test.ts\n" + TSC_LINE +
+              "\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n")
+    record(project, "npm test 2>&1 | tail -20", output)
+    assert contradiction(project, "npm test") is None
+
+
+def test_a_wrapper_whose_failure_comes_after_the_tests_is_still_blamed(project):
+    output = (" Test Files  1 passed (1)\n      Tests  3 passed (3)\n\n> app@1.0.0 test\n" + TSC_LINE)
+    record(project, "npm test 2>&1 | tail -20", output)
+    assert contradiction(project, "npm test") is not None

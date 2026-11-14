@@ -76,3 +76,21 @@ def test_npms_echo_of_a_script_command_is_not_a_failure_line():
     # a script whose command text held "error TS" matched as if tsc had failed.
     output = "\n> app@1.0.0 check\n> node scripts/report.js --pattern 'src/a.ts(1,1): error TS1005: x'\n\nclean\n"
     assert failure_lines(output, "npm run check") == []
+
+
+# --- gotestsum --rerun-fails: a flaky test that passed on the rerun -----------
+
+@pytest.mark.parametrize("name", ["gotestsum-rerun-pass-sv.txt", "gotestsum-rerun-pass.txt",
+                                  "make-gotestsum-rerun-pass-piped.txt"])
+def test_a_package_that_passed_on_a_rerun_is_not_a_failure(name):
+    assert families(name, "make test") == []
+
+
+def test_a_rerun_that_still_failed_is_caught_through_make():
+    assert "make" in families("make-gotestsum-rerun-fail.txt", "make test")
+
+
+def test_go_test_lines_need_the_package_fail_line():
+    # go test always ends a failing package with "FAIL\t<package>"; a lone
+    # "--- FAIL:" is some other program's text.
+    assert failure_lines("--- FAIL: TestX (0.00s)\nok  \texample.com/x\t0.1s\n", "make test") == []

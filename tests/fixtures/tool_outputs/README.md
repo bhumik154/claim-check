@@ -9,3 +9,13 @@ Notable facts these files establish:
 - eslint prints a "✖ N problems" line on success too; only a nonzero error
   count is a failure.
 - go vet prints only file:line messages, so only its exit code tells.
+
+gotestsum-*.txt and make-gotestsum-*.txt: gotestsum v1.12.0 with
+`--rerun-fails`, go 1.23.12, captured the same way on 2026-11-14. A flaky
+test fails on the first run and passes on the rerun; in the -fail files a
+second test always fails.
+- The default format prints no `--- FAIL` or `FAIL\t` lines at all, only
+  its own "DONE 2 runs, 3 tests, 1 failure" tally, even when the rerun
+  passed and gotestsum exited 0.
+- standard-verbose prints go's own `FAIL\t<package>` for the first run and
+  `ok  \t<package>` for the rerun. The later `ok` is what says it passed.

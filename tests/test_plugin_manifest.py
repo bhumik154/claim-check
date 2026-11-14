@@ -120,8 +120,16 @@ def test_failed_bash_calls_are_recorded_by_a_failure_hook():
     # PostToolUse; without this entry claim-check never sees a failure.
     hooks = json.loads(HOOKS_MANIFEST.read_text(encoding="utf-8"))["hooks"]
     [entry] = hooks["PostToolUseFailure"]
-    assert entry["matcher"] == "Bash"
+    assert entry["matcher"] == "Bash|PowerShell"
     assert entry["hooks"][0]["command"].endswith("claude_posttoolusefailure_hook")
+
+
+def test_powershell_calls_are_recorded_too():
+    # A command rerun through PowerShell that passed must count as the latest
+    # run, or a Bash failure before it reads as "the last run failed".
+    hooks = json.loads(HOOKS_MANIFEST.read_text(encoding="utf-8"))["hooks"]
+    assert [e["matcher"] for e in hooks["PostToolUse"]] == ["Bash|PowerShell"]
+    assert [e["matcher"] for e in hooks["PreToolUse"]] == ["Bash"]
 
 
 def test_every_hook_names_an_entrypoint_module_that_exists():
